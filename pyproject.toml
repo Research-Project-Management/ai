@@ -1,0 +1,9 @@
+[project]
+name = "flux-ai"
+version = "0.1.0"
+description = "Multi-Agent AI Orchestrator for Scientific Research Task Management"
+requires-python = ">=3.12"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

@@ -1,0 +1,65 @@
+"""Pydantic request/response models."""
+
+from __future__ import annotations
+
+from typing import Any
+
+from pydantic import BaseModel, Field
+
+
+# ── Request Models ───────────────────────────────────────────────
+
+class ChatMessage(BaseModel):
+    role: str = Field(..., description="Role: 'user' or 'assistant'")
+    content: str
+
+
+class ChatRequest(BaseModel):
+    """Unified chat request — the router decides which agent handles it."""
+
+    messages: list[ChatMessage]
+    project_id: str | None = None
+    document_ids: list[str] | None = None
+    intent_hint: str | None = Field(
+        None,
+        description="Optional hint to force a specific agent: chat, rag, analyze, latex, task, web_search",
+    )
+    web_search_sites: list[str] | None = Field(
+        None,
+        description="Sites to restrict web search to. Defaults to curated academic sources when web_search intent is used.",
+    )
+
+
+class DocumentUploadMeta(BaseModel):
+    title: str | None = None
+    tags: list[str] = Field(default_factory=list)
+
+
+# ── Response Models ──────────────────────────────────────────────
+
+class AgentOutput(BaseModel):
+    """Structured output from any agent."""
+
+    agent_name: str
+    content: str
+    sources: list[dict[str, Any]] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class ChatResponse(BaseModel):
+    """Non-streaming response wrapper."""
+
+    output: AgentOutput
+    intent: str | None = None
+
+
+class DocumentInfo(BaseModel):
+    id: str
+    title: str
+    chunk_count: int
+    tags: list[str] = Field(default_factory=list)
+
+
+class HealthStatus(BaseModel):
+    status: str = "ok"
+    services: dict[str, str] = Field(default_factory=dict)
