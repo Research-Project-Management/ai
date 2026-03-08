@@ -1,10 +1,13 @@
 """
-LangGraph Router — the core orchestrator.
+LangGraph Router — orchestrator for specialized agents.
 
 Builds a StateGraph that:
-1. Classifies the user's intent via LLM function-calling
+1. Classifies the user's intent via LLM (choosing among specialized agents only)
 2. Routes to the correct specialized agent
 3. Returns the agent's output
+
+Note: RAG and web_search are NOT classified here.
+They are handled by the streaming pipeline in app/api/chat.py.
 """
 
 from __future__ import annotations
@@ -16,13 +19,17 @@ from langchain_core.messages import HumanMessage
 from langgraph.graph import END, StateGraph
 
 from app.agents.base import AgentState
-from app.agents.registry import agent_descriptions, get_agent, list_agents
+from app.agents.registry import get_agent, list_agents
 from app.config import get_llm
 
 logger = logging.getLogger(__name__)
 
 
 # ── Intent Classification ────────────────────────────────────────
+
+# Only these agents are offered to the LLM classifier.
+# rag and web_search are decided by the streaming pipeline (chat.py), not the LLM.
+_CLASSIFIABLE_AGENTS = {"latex", "analyze", "task", "chat"}
 
 CLASSIFY_SYSTEM_PROMPT = """\
 You are an intent classifier for a multi-agent AI system.
@@ -41,26 +48,26 @@ Rules:
 
 
 async def classify_intent(state: AgentState) -> AgentState:
-    """Use LLM to classify which agent should handle the request."""
+    """Use LLM to classify which specialized agent should handle the request."""
 
-    # If intent_hint is provided, skip classification
     metadata = state.get("metadata", {})
+    # Respect explicit intent hint
     if metadata.get("intent_hint"):
         hint = metadata["intent_hint"]
-        available = list_agents()
-        if hint in available:
+        if hint in list_agents():
             state["intent"] = hint
             logger.info("Intent forced by hint: %s", hint)
             return state
 
     llm = get_llm(temperature=0)
 
-    # Exclude "web_search" from the LLM classifier — it is only activated
-    # programmatically when the user explicitly enables the Web toggle (web_search_sites).
+    # Only present the classifiable (specialized) agents to the LLM.
+    # rag / web_search are resolved by the pipeline in chat.py.
+    from app.agents.registry import agent_descriptions
     agents_desc = "\n".join(
         f"- {a['name']}: {a['description']}"
         for a in agent_descriptions()
-        if a["name"] != "web_search"
+        if a["name"] in _CLASSIFIABLE_AGENTS
     )
 
     system_prompt = CLASSIFY_SYSTEM_PROMPT.format(agents=agents_desc)
@@ -85,61 +92,24 @@ async def classify_intent(state: AgentState) -> AgentState:
         ]
     )
 
-    # Parse agent name from response
     content = response.content if isinstance(response.content, str) else str(response.content)
 
     try:
-        # Try JSON parse
         clean = content.strip()
         if clean.startswith("```"):
             clean = clean.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
         parsed = json.loads(clean)
         agent_name = parsed.get("agent", "chat")
     except (json.JSONDecodeError, AttributeError):
-        # Fallback: look for agent name in text
-        available = list_agents()
         agent_name = "chat"
-        for name in available:
+        for name in _CLASSIFIABLE_AGENTS:
             if name in content.lower():
                 agent_name = name
                 break
 
-    # Validate agent exists
-    available = list_agents()
-    if agent_name not in available:
+    # Validate — fall back to "chat" for anything not in the classifiable set
+    if agent_name not in _CLASSIFIABLE_AGENTS:
         agent_name = "chat"
-
-    # Safety guard: LLM must never pick web_search on its own.
-    # web_search is only activated when the user explicitly enables the toggle (web_search_sites metadata).
-    if agent_name == "web_search" and not metadata.get("web_search_sites"):
-        logger.info("LLM picked web_search but web toggle is OFF — redirecting to chat")
-        agent_name = "chat"
-
-    # If document_ids are provided, user explicitly wants RAG — prioritise it.
-    if metadata.get("document_ids") and agent_name != "rag":
-        logger.info("document_ids set — overriding %s → rag", agent_name)
-        agent_name = "rag"
-
-    # Only switch to web_search when the user explicitly enabled it
-    # (web_search_sites is only sent by the FE when the Web toggle is ON).
-    if metadata.get("web_search_sites") and agent_name not in ("rag", "web_search"):
-        logger.info("web_search_sites set — overriding %s → web_search", agent_name)
-        agent_name = "web_search"
-
-    # If LLM chose rag, verify the collection actually has documents.
-    # If empty, fall back to chat — never auto-escalate to web_search.
-    if agent_name == "rag":
-        try:
-            from app.rag.store import get_qdrant_client
-            from app.config import get_settings
-            settings = get_settings()
-            client = get_qdrant_client()
-            count = client.count(collection_name=settings.qdrant_collection, exact=False).count
-            if count == 0:
-                agent_name = "chat"
-                logger.info("RAG collection is empty — redirecting to chat")
-        except Exception as e:
-            logger.warning("Could not check RAG collection size: %s", e)
 
     state["intent"] = agent_name
     logger.info("Classified intent: %s", agent_name)
@@ -159,26 +129,16 @@ async def execute_agent(state: AgentState) -> AgentState:
 # ── Build the Graph ──────────────────────────────────────────────
 
 def build_graph() -> StateGraph:
-    """
-    Build and compile the LangGraph orchestrator.
-
-    Flow: classify_intent → execute_agent → END
-    """
+    """Build and compile the LangGraph orchestrator (used by /chat/sync)."""
     graph = StateGraph(AgentState)
-
-    # Add nodes
     graph.add_node("classify", classify_intent)
     graph.add_node("execute", execute_agent)
-
-    # Define edges
     graph.set_entry_point("classify")
     graph.add_edge("classify", "execute")
     graph.add_edge("execute", END)
-
     return graph.compile()
 
 
-# Compiled graph singleton
 _graph = None
 
 

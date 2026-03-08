@@ -30,6 +30,39 @@ def get_qdrant_client() -> QdrantClient:
 EMBEDDING_DIM = 3072  # text-embedding-004
 
 
+def _ensure_payload_indexes(client: QdrantClient, collection_name: str) -> None:
+    """Create payload indexes required for filtered searches.
+
+    Qdrant Cloud requires explicit keyword/UUID indexes before a field can
+    be used in a FieldCondition filter.  This function is idempotent — calling
+    it on an existing index is a no-op.
+    """
+    from qdrant_client.models import PayloadSchemaType
+
+    indexes = {
+        "metadata.doc_id": PayloadSchemaType.KEYWORD,
+        "metadata.source": PayloadSchemaType.KEYWORD,
+    }
+    existing = {}
+    try:
+        info = client.get_collection(collection_name)
+        existing = info.payload_schema or {}
+    except Exception:
+        pass
+
+    for field, schema in indexes.items():
+        if field not in existing:
+            try:
+                client.create_payload_index(
+                    collection_name=collection_name,
+                    field_name=field,
+                    field_schema=schema,
+                )
+                logger.info("Created payload index on '%s'", field)
+            except Exception as exc:
+                logger.warning("Could not create index for '%s': %s", field, exc)
+
+
 def get_vector_store() -> QdrantVectorStore:
     """Get or create the LangChain QdrantVectorStore singleton."""
     global _vector_store
@@ -61,6 +94,9 @@ def get_vector_store() -> QdrantVectorStore:
                 vectors_config=VectorParams(size=EMBEDDING_DIM, distance=Distance.COSINE),
             )
             logger.info("Created collection: %s", settings.qdrant_collection)
+
+        # Ensure payload indexes exist (required for filtered searches on Qdrant Cloud)
+        _ensure_payload_indexes(client, settings.qdrant_collection)
 
         _vector_store = QdrantVectorStore(
             client=client,

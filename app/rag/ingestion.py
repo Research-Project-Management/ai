@@ -37,13 +37,85 @@ async def ingest_pdf(file_path: str, metadata: dict[str, Any] | None = None) -> 
     text = "\n\n".join(page.extract_text() or "" for page in reader.pages)
 
     doc_id = str(uuid.uuid4())
+    # Use original filename from metadata if available; fall back to the
+    # UUID-based saved filename only when no title was supplied.
+    source_name = (metadata or {}).get("title") or Path(file_path).name
     base_metadata = {
         "doc_id": doc_id,
-        "source": Path(file_path).name,
+        "source": source_name,
         "type": "pdf",
         **(metadata or {}),
     }
 
+    return await _ingest_text(text, base_metadata, doc_id)
+
+
+async def ingest_docx(file_path: str, metadata: dict[str, Any] | None = None) -> dict:
+    """
+    Ingest a Word document (.docx): extract paragraphs + tables → chunk → store.
+
+    Returns info about the ingested document.
+    """
+    from docx import Document as DocxDocument
+
+    doc = DocxDocument(file_path)
+
+    parts: list[str] = []
+
+    # Body paragraphs
+    for para in doc.paragraphs:
+        stripped = para.text.strip()
+        if stripped:
+            parts.append(stripped)
+
+    # Tables (each row as pipe-delimited text)
+    for table in doc.tables:
+        for row in table.rows:
+            cells = [cell.text.strip() for cell in row.cells if cell.text.strip()]
+            if cells:
+                parts.append(" | ".join(cells))
+
+    text = "\n\n".join(parts)
+
+    doc_id = str(uuid.uuid4())
+    source_name = (metadata or {}).get("title") or Path(file_path).name
+    base_metadata = {
+        "doc_id": doc_id,
+        "source": source_name,
+        "type": "docx",
+        **(metadata or {}),
+    }
+    return await _ingest_text(text, base_metadata, doc_id)
+
+
+async def ingest_xlsx(file_path: str, metadata: dict[str, Any] | None = None) -> dict:
+    """
+    Ingest an Excel spreadsheet (.xlsx/.xls): read all sheets → chunk → store.
+
+    Returns info about the ingested document.
+    """
+    from openpyxl import load_workbook
+
+    wb = load_workbook(file_path, read_only=True, data_only=True)
+    lines: list[str] = []
+    for sheet in wb.worksheets:
+        lines.append(f"## Sheet: {sheet.title}")
+        for row in sheet.iter_rows(values_only=True):
+            row_cells = [str(v) for v in row if v is not None and str(v).strip()]
+            if row_cells:
+                lines.append(" | ".join(row_cells))
+    wb.close()
+
+    text = "\n".join(lines)
+
+    doc_id = str(uuid.uuid4())
+    source_name = (metadata or {}).get("title") or Path(file_path).name
+    base_metadata = {
+        "doc_id": doc_id,
+        "source": source_name,
+        "type": "xlsx",
+        **(metadata or {}),
+    }
     return await _ingest_text(text, base_metadata, doc_id)
 
 

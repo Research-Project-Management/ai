@@ -1,4 +1,4 @@
-"""Retriever — semantic search over the vector store."""
+"""Retriever — semantic search over Qdrant."""
 
 from __future__ import annotations
 
@@ -12,15 +12,26 @@ logger = logging.getLogger(__name__)
 
 async def retrieve_documents(
     query: str,
-    k: int = 5,
+    k: int = 8,
     score_threshold: float = 0.3,
     document_ids: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     """
-    Perform semantic search and return relevant document chunks.
+    Similarity search over the vector store.
 
-    If document_ids is provided, restricts search to only those documents.
-    Returns a list of dicts with keys: content, source, score, metadata.
+    Args:
+        query: The search query.  Pass the best English representation for
+               good embedding alignment.  The caller is responsible for
+               choosing an appropriate query strategy (targeted vs. broad
+               coverage) and k.
+        k: Maximum number of chunks to return.
+        score_threshold: Minimum cosine similarity.  Ignored when
+                         document_ids is provided (user explicitly pinned
+                         these files so we return everything).
+        document_ids: Restrict search to these Qdrant doc IDs.
+
+    Returns:
+        List of dicts: {content, source, score, metadata}
     """
     from qdrant_client.models import FieldCondition, Filter, MatchAny
 
@@ -28,7 +39,6 @@ async def retrieve_documents(
 
     search_kwargs: dict[str, Any] = {}
     if document_ids:
-        # Filter Qdrant to only the user's explicitly uploaded docs
         search_kwargs["filter"] = Filter(
             must=[
                 FieldCondition(
@@ -40,13 +50,11 @@ async def retrieve_documents(
 
     results = await store.asimilarity_search_with_score(query, k=k, **search_kwargs)
 
-    documents = []
+    chunks = []
     for doc, score in results:
-        # When filtering to specific docs, use a very permissive threshold —
-        # the user explicitly uploaded these files so we always return something.
         effective_threshold = 0.0 if document_ids else score_threshold
         if score >= effective_threshold:
-            documents.append(
+            chunks.append(
                 {
                     "content": doc.page_content,
                     "source": doc.metadata.get("source", "unknown"),
@@ -55,5 +63,5 @@ async def retrieve_documents(
                 }
             )
 
-    logger.info("Retrieved %d documents for query: %s...", len(documents), query[:50])
-    return documents
+    logger.info("retrieve_documents: query=%r k=%d → %d chunks", query[:60], k, len(chunks))
+    return chunks

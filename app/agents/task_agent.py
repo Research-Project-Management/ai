@@ -12,7 +12,7 @@ TASK_PROMPT = ChatPromptTemplate.from_messages(
     [
         (
             "system",
-            "You are a research project planner and task manager. "
+            "You are FLux AI, and you are a research project planner and task manager. "
             "Based on the current project context, suggest actionable next "
             "steps and tasks.\n\n"
             "Format your response as:\n"

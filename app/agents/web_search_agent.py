@@ -124,19 +124,27 @@ def _search_openalex(query: str, sites: list[str], max_results: int = _OPENALEX_
                         words.append((pos, word))
                 abstract = " ".join(wd for _, wd in sorted(words))[:400]
 
-            year = w.get("publication_year", "")
-            authors = ", ".join(
+            year = w.get("publication_year") or ""
+            authors_list = [
                 a["author"]["display_name"]
                 for a in (w.get("authorships") or [])[:3]
                 if a.get("author")
-            )
+            ]
+            authors = ", ".join(authors_list)
             body = abstract + (f" — {authors}" if authors else "") + (f" ({year})" if year else "")
+
+            doi = w.get("doi") or ""
+            doi_url = doi if doi.startswith("http") else (f"https://doi.org/{doi}" if doi else "")
 
             results.append({
                 "title": w.get("title") or "Untitled",
                 "href": url,
                 "body": body.strip(),
                 "source": "openalex",
+                # Rich metadata kept as separate fields for the sources panel
+                "authors": authors or None,
+                "year": int(year) if year else None,
+                "doi": doi_url or None,
             })
             if len(results) >= max_results:
                 break
@@ -157,6 +165,8 @@ def _search(query: str, sites: list[str] | None = None, max_results: int = _MAX_
     english_query = _translate_to_english(bare_query)
 
     ddg = _search_ddg(query, max_results=max_results)
+    # Filter DDG results to only include URLs that belong to the configured sites
+    ddg = [r for r in ddg if any(site in r.get("href", "") for site in _sites)]
     oalex = _search_openalex(english_query, sites=_sites, max_results=_OPENALEX_MAX)
 
     # Deduplicate by URL
@@ -232,6 +242,19 @@ class WebSearchAgent(BaseAgent):
         logger.info("WebSearch query: %s", query)
         results = _search(query, sites=sites)
         return results, query
+
+    def fetch_results_with_query(
+        self, search_query: str, sites: list[str]
+    ) -> tuple[list[dict], str]:
+        """Run search with a pre-optimised query (built by chat.py's _rewrite_query).
+
+        Preferred over fetch_results for the streaming pipeline — the caller
+        already has a concise, search-ready string so we skip the message extraction step.
+        """
+        _sites = sites or DEFAULT_ACADEMIC_SITES
+        logger.info("WebSearch (pre-built query): %s | sites: %s", search_query, _sites)
+        results = _search(search_query, sites=_sites)
+        return results, search_query
 
     async def run(self, state: AgentState) -> AgentState:
         metadata = state.get("metadata", {})
