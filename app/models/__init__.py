@@ -22,11 +22,20 @@ class ChatRequest(BaseModel):
     document_ids: list[str] | None = None
     intent_hint: str | None = Field(
         None,
-        description="Optional hint to force a specific agent: chat, rag, analyze, latex, task, web_search",
+        description="Optional hint to force a specific agent: chat, rag, analyze, latex, task, web_search, action",
     )
     web_search_sites: list[str] | None = Field(
         None,
         description="Sites to restrict web search to. Defaults to curated academic sources when web_search intent is used.",
+    )
+    # Agent context — injected by RPM-BE proxy for action agent
+    workspace_id: str | None = Field(
+        None,
+        description="Workspace ID or URL slug. Required for action agent operations.",
+    )
+    user_id: str | None = Field(
+        None,
+        description="Authenticated user's MongoDB ObjectId. Injected by RPM-BE proxy.",
     )
 
 
