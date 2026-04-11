@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from langchain_core.tools import tool
 
-from app.tools._client import flux_api
+from app.tools._client import flux_api, get_workspace_id
 
 
 @tool
@@ -18,6 +18,93 @@ async def list_tasks(project_id: str) -> dict:
         project_id: MongoDB ObjectId of the project.
     """
     return await flux_api.get(f"/api/project/{project_id}/tasks")
+
+
+@tool
+async def get_my_tasks(workspace_id: str = "") -> dict:
+    """Get all tasks assigned to the currently logged-in user across ALL projects in the workspace.
+
+    Use this when the user asks:
+    - "task của tôi là gì?"
+    - "tôi đang làm gì?"
+    - "tóm tắt công việc của tôi"
+    - "show my tasks"
+
+    Returns tasks with project info, status (columnId), priority, dueDate.
+
+    Args:
+        workspace_id: Workspace ID or URL slug. If empty, uses the current session workspace.
+    """
+    ws = workspace_id or get_workspace_id()
+    if not ws:
+        return {"error": True, "message": "workspace_id is required"}
+    return await flux_api.get(f"/api/workspace/{ws}/tasks")
+
+
+@tool
+async def summarize_member_tasks(project_id: str, member_name: str) -> dict:
+    """Get and summarize tasks assigned to a specific team member in a project.
+
+    Use this when the user asks:
+    - "task của [tên người] trong project này"
+    - "Nguyễn Văn A đang làm gì?"
+    - "tóm tắt công việc của [member]"
+
+    Fetches all project tasks then filters by member name (case-insensitive, partial match).
+
+    Args:
+        project_id: MongoDB ObjectId of the project.
+        member_name: Name (full or partial) of the team member to filter by.
+    """
+    result = await flux_api.get(f"/api/project/{project_id}/tasks")
+    if isinstance(result, dict) and result.get("error"):
+        return result
+
+    tasks = result.get("tasks", []) if isinstance(result, dict) else []
+    name_lower = member_name.lower()
+
+    # Filter tasks where assignee name matches
+    member_tasks = [
+        t for t in tasks
+        if t.get("assignee") and
+        name_lower in (t["assignee"].get("name", "") or "").lower()
+    ]
+
+    if not member_tasks:
+        return {
+            "member": member_name,
+            "found": 0,
+            "message": f"No tasks found assigned to '{member_name}' in this project.",
+        }
+
+    # Group by status column
+    by_status: dict[str, list] = {}
+    by_priority: dict[str, int] = {}
+    overdue: list = []
+
+    for t in member_tasks:
+        col = t.get("columnId", "unknown")
+        by_status.setdefault(col, []).append({
+            "title": t.get("title"),
+            "id": str(t.get("_id", "")),
+            "priority": t.get("priority", "none"),
+            "dueDate": t.get("dueDate"),
+        })
+
+        pri = t.get("priority", "none")
+        by_priority[pri] = by_priority.get(pri, 0) + 1
+
+        if t.get("isOverdue") and col != "done":
+            overdue.append(t.get("title"))
+
+    return {
+        "member": member_name,
+        "found": len(member_tasks),
+        "by_status": by_status,
+        "by_priority": by_priority,
+        "overdue_tasks": overdue,
+        "project": result.get("projectName", project_id),
+    }
 
 
 @tool

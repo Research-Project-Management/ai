@@ -275,11 +275,23 @@ user asks about content in their documents.
 Use when the user needs current information, research papers, or anything beyond \
 their uploaded documents.
 
-## Routing Rules
-1. If the user references their uploaded documents or files → **rag**
-2. If the user needs external/recent information or asks to search → **web_search**
-3. If the request clearly matches a specialized agent → that agent's name
-4. If unsure or general conversation → **chat**
+## Routing Rules  
+1. If the user asks about their **workspace content** (projects, members, recent items, activity feed) → **action**
+2. If the user wants to **create, update, or delete** something (task, goal, cycle, sticky, page) → **action**
+3. If the user asks about **project status, progress, tasks, team** → **action**
+4. If the user asks to **search** within their workspace → **action**
+5. If the user references their **uploaded documents or files** → **rag**
+6. If the user needs **external/recent information** or asks to search the web → **web_search**
+7. If the request clearly matches another specialized agent (latex, analyze, task planner) → that agent's name
+8. If it's a **general knowledge question** with no workspace context needed → **chat**
+
+## Action Agent Triggers (always route to **action** for these)
+- "workspace có gì", "workspace của tôi", "có những project nào"
+- "tạo task", "tạo goal", "tạo cycle", "tạo sticky"
+- "member trong workspace", "ai trong team"
+- "tiến độ project", "project status", "có gì mới"
+- "create task", "create goal", "show projects", "workspace overview"
+- Any CRUD operation on workspace entities
 
 ## Runtime Status
 - Web search: {web_status}

@@ -76,9 +76,11 @@ class FluxAPIClient:
         """Make an authenticated request to RPM-BE."""
         user_id = _current_user_id.get()
         if not user_id:
-            raise RuntimeError(
-                "No user context set. Call set_user_context() before using tools."
+            logger.warning(
+                "No user context set for %s %s — call set_user_context() before using tools.",
+                method, path,
             )
+            return {"error": True, "status": 401, "message": "No user context set"}
 
         headers = {
             "X-Internal-Key": self.internal_key,

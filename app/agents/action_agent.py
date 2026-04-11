@@ -106,10 +106,15 @@ class ActionAgent(BaseAgent):
 
     name = "action"
     description = (
-        "Performs workspace operations: create/manage tasks, search content, "
-        "generate project summaries, assign work to team members, manage cycles "
-        "and sticky notes. Use for any request that requires DOING something "
-        "in the workspace rather than just answering a knowledge question."
+        "The primary agent for ALL workspace and project operations. Use this when the user: "
+        "(1) asks about their workspace — what projects exist, who are the members, recent activity, overview; "
+        "(2) wants to CREATE anything — tasks, goals, research cycles, sticky notes; "
+        "(3) wants to UPDATE or DELETE tasks; "
+        "(4) asks about project status, task progress, team workload; "
+        "(5) asks to search within their workspace; "
+        "(6) wants to plan or break down work into tasks/goals; "
+        "(7) asks 'có gì mới?', 'workspace có gì?', 'project của tôi như thế nào?'. "
+        "This agent has direct access to all workspace data via API tools."
     )
 
     def get_system_prompt(self, **kwargs) -> str:
