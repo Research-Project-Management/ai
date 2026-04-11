@@ -33,3 +33,17 @@ async def get_project_overview(project_id: str) -> dict:
         project_id: MongoDB ObjectId of the project.
     """
     return await flux_api.get(f"/api/project/{project_id}/overview")
+
+
+@tool
+async def get_project_details(project_id: str) -> dict:
+    """Get basic project information including name, description, members, and settings.
+
+    Unlike get_project_overview (which returns task stats and activity),
+    this returns the project metadata and team composition.
+
+    Args:
+        project_id: MongoDB ObjectId of the project.
+    """
+    return await flux_api.get(f"/api/project/{project_id}")
+

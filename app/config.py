@@ -11,7 +11,7 @@ class Settings(BaseSettings):
     # LLM
     gemini_api_key: str = ""
     llm_model: str = "gemini-2.0-flash-lite"
-    embedding_model: str = "text-embedding-004"
+    embedding_model: str = "gemini-embedding-001"
 
     # Local LLM via Ollama — set LLM_PROVIDER=ollama to use
     llm_provider: str = "gemini"  # "gemini" | "ollama" | "groq"

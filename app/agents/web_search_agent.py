@@ -13,11 +13,21 @@ from app.config import get_llm
 logger = logging.getLogger(__name__)
 
 DEFAULT_ACADEMIC_SITES = [
+    # Primary academic sources
     "arxiv.org",
-    "aclanthology.org",
-    "openreview.net",
     "ieeexplore.ieee.org",
     "dl.acm.org",
+    "pubmed.ncbi.nlm.nih.gov",
+    "semanticscholar.org",
+    "scholar.google.com",
+    # Publishers
+    "springer.com",
+    "nature.com",
+    "sciencedirect.com",
+    "researchgate.net",
+    # Conference proceedings & preprints
+    "aclanthology.org",
+    "openreview.net",
     "zenodo.org",
     "ceur-ws.org",
     "proceedings.mlr.press",
@@ -26,16 +36,31 @@ DEFAULT_ACADEMIC_SITES = [
     "jmlr.org",
     "biorxiv.org",
     "medrxiv.org",
-
 ]
 
 _MAX_RESULTS = 8
 _OPENALEX_MAX = 5
 
 
-def _build_query(user_query: str, sites: list[str]) -> str:
-    """Return the bare user query for DuckDuckGo (no site: filters — they break multi-site OR in DDG)."""
-    return user_query
+# Top-priority sites for DDG site:-targeted searches
+_DDG_PRIORITY_SITES = ["arxiv.org", "scholar.google.com", "semanticscholar.org"]
+
+
+def _build_site_queries(user_query: str, sites: list[str]) -> list[str]:
+    """Build multiple DDG queries: one per priority site (with site: operator) + one broad query.
+
+    DDG supports `site:domain` for single-domain filtering which is much more
+    reliable than post-hoc URL filtering. We issue a few targeted queries in
+    parallel for the sites most likely to have good results.
+    """
+    queries = []
+    # Pick up to 3 priority sites that are in the user's allowed list
+    priority = [s for s in _DDG_PRIORITY_SITES if s in sites][:3]
+    for site in priority:
+        queries.append(f"{user_query} site:{site}")
+    # Always include a broad query (will be post-filtered)
+    queries.append(user_query)
+    return queries
 
 
 def _translate_to_english(text: str) -> str:
@@ -157,22 +182,44 @@ def _search_openalex(query: str, sites: list[str], max_results: int = _OPENALEX_
 
 
 def _search(query: str, sites: list[str] | None = None, max_results: int = _MAX_RESULTS) -> list[dict]:
-    """Merge DuckDuckGo + OpenAlex results, deduplicated by URL."""
-    _sites = sites or DEFAULT_ACADEMIC_SITES
-    # Extract bare user query (strip site: filters) for OpenAlex
-    bare_query = query.split(")", 1)[-1].strip() if ")" in query else query
-    # OpenAlex is English-indexed — translate before searching
-    english_query = _translate_to_english(bare_query)
+    """Merge DuckDuckGo + OpenAlex results, deduplicated by URL.
 
-    ddg = _search_ddg(query, max_results=max_results)
-    # Filter DDG results to only include URLs that belong to the configured sites
-    ddg = [r for r in ddg if any(site in r.get("href", "") for site in _sites)]
+    Strategy:
+    1. Issue targeted DDG queries with site: operator for priority sites
+    2. Issue a broad DDG query and post-filter by allowed sites
+    3. If both produce 0 results, return the unfiltered broad DDG results as fallback
+    4. Always run OpenAlex in parallel for academic enrichment
+    """
+    _sites = sites or DEFAULT_ACADEMIC_SITES
+    user_has_sites = sites is not None and len(sites) > 0
+
+    # OpenAlex is English-indexed — translate before searching
+    english_query = _translate_to_english(query)
+
+    # ── DDG searches: targeted + broad ──────────────────────────
+    ddg_queries = _build_site_queries(query, _sites)
+    all_ddg: list[dict] = []
+    broad_ddg: list[dict] = []  # unfiltered broad results (last query)
+
+    for i, q in enumerate(ddg_queries):
+        results = _search_ddg(q, max_results=max_results)
+        is_broad = (i == len(ddg_queries) - 1)  # last query is always the broad one
+
+        if is_broad:
+            broad_ddg = results[:]
+            # Post-filter broad results by allowed sites (only if user specified sites)
+            if user_has_sites:
+                results = [r for r in results if any(site in r.get("href", "") for site in _sites)]
+        # targeted queries already have site: so all results are relevant
+        all_ddg.extend(results)
+
+    # ── OpenAlex ──────────────────────────────────────────────────
     oalex = _search_openalex(english_query, sites=_sites, max_results=_OPENALEX_MAX)
 
-    # Deduplicate by URL
+    # ── Merge + deduplicate ───────────────────────────────────────
     seen: set[str] = set()
     merged: list[dict] = []
-    for r in ddg + oalex:
+    for r in all_ddg + oalex:
         url = r.get("href", "")
         if url and url in seen:
             continue
@@ -180,6 +227,13 @@ def _search(query: str, sites: list[str] | None = None, max_results: int = _MAX_
             seen.add(url)
         merged.append(r)
 
+    # ── Fallback: if everything was filtered away, return unfiltered broad results
+    if not merged and broad_ddg:
+        logger.warning("All DDG results filtered out — returning %d unfiltered broad results", len(broad_ddg))
+        merged = broad_ddg
+
+    logger.info("Web search merged: %d results (ddg_targeted=%d, broad=%d, openalex=%d)",
+                len(merged), len(all_ddg), len(broad_ddg), len(oalex))
     return merged
 
 
@@ -238,7 +292,7 @@ class WebSearchAgent(BaseAgent):
         if not user_query and messages:
             user_query = str(messages[-1].content)
 
-        query = _build_query(user_query, sites)
+        query = user_query
         logger.info("WebSearch query: %s", query)
         results = _search(query, sites=sites)
         return results, query

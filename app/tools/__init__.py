@@ -15,10 +15,13 @@ from app.tools.task_tools import (
 from app.tools.project_tools import (
     list_projects,
     get_project_overview,
+    get_project_details,
 )
 from app.tools.workspace_tools import (
     search_workspace,
     list_members,
+    get_workspace_overview,
+    get_workspace_activity,
 )
 from app.tools.cycle_tools import (
     list_cycles,
@@ -43,9 +46,12 @@ ALL_TOOLS = [
     # Project
     list_projects,
     get_project_overview,
+    get_project_details,
     # Workspace
     search_workspace,
     list_members,
+    get_workspace_overview,
+    get_workspace_activity,
     # Research cycles
     list_cycles,
     create_cycle,

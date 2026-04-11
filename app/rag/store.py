@@ -27,7 +27,7 @@ def get_qdrant_client() -> QdrantClient:
     return _client
 
 
-EMBEDDING_DIM = 3072  # text-embedding-004
+EMBEDDING_DIM = 3072  # gemini-embedding-001 (3072-dim output)
 
 
 def _ensure_payload_indexes(client: QdrantClient, collection_name: str) -> None:
