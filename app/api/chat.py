@@ -256,6 +256,7 @@ async def chat(request: ChatRequest):
         "web_search_sites": request.web_search_sites,
         "workspace_id": request.workspace_id,
         "user_id": request.user_id,
+        "chat_id": request.chat_id,
     }
 
     # Build initial pipeline state
@@ -265,6 +266,8 @@ async def chat(request: ChatRequest):
         "web_search_enabled": bool(request.web_search_sites),
         "web_search_sites": request.web_search_sites or [],
         "metadata": metadata,
+        "user_id": request.user_id or "",
+        "chat_id": request.chat_id or "",
     }
 
     async def event_stream():

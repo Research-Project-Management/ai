@@ -42,6 +42,8 @@ def _ensure_payload_indexes(client: QdrantClient, collection_name: str) -> None:
     indexes = {
         "metadata.doc_id": PayloadSchemaType.KEYWORD,
         "metadata.source": PayloadSchemaType.KEYWORD,
+        "metadata.user_id": PayloadSchemaType.KEYWORD,
+        "metadata.chat_id": PayloadSchemaType.KEYWORD,
     }
     existing = {}
     try:

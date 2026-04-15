@@ -37,6 +37,10 @@ class ChatRequest(BaseModel):
         None,
         description="Authenticated user's MongoDB ObjectId. Injected by RPM-BE proxy.",
     )
+    chat_id: str | None = Field(
+        None,
+        description="Chat session ID. Documents are scoped to this session — used for RAG isolation.",
+    )
 
 
 class DocumentUploadMeta(BaseModel):

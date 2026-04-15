@@ -72,8 +72,16 @@ class RAGAgent(BaseAgent):
             try:
                 from app.rag.retriever import retrieve_documents
 
-                doc_ids = state.get("metadata", {}).get("document_ids") or None
-                results = await retrieve_documents(question, document_ids=doc_ids)
+                meta = state.get("metadata", {})
+                doc_ids = meta.get("document_ids") or None
+                user_id = meta.get("user_id") or None
+                chat_id = meta.get("chat_id") or None
+                results = await retrieve_documents(
+                    question,
+                    document_ids=doc_ids,
+                    user_id=user_id,
+                    chat_id=chat_id,
+                )
                 context_text = "\n\n---\n\n".join(
                     f"[Source: {r.get('source', 'unknown')}]\n{r.get('content', '')}"
                     for r in results

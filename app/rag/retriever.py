@@ -15,6 +15,8 @@ async def retrieve_documents(
     k: int = 8,
     score_threshold: float = 0.3,
     document_ids: list[str] | None = None,
+    user_id: str | None = None,
+    chat_id: str | None = None,
 ) -> list[dict[str, Any]]:
     """
     Similarity search over the vector store.
@@ -29,24 +31,40 @@ async def retrieve_documents(
                          document_ids is provided (user explicitly pinned
                          these files so we return everything).
         document_ids: Restrict search to these Qdrant doc IDs.
+        user_id: Only return chunks uploaded by this user (RAG isolation).
+        chat_id: Only return chunks uploaded in this chat session (RAG isolation).
 
     Returns:
         List of dicts: {content, source, score, metadata}
     """
-    from qdrant_client.models import FieldCondition, Filter, MatchAny
+    from qdrant_client.models import FieldCondition, Filter, MatchAny, MatchValue
 
     store = get_vector_store()
 
-    search_kwargs: dict[str, Any] = {}
+    filter_conditions = []
+
+    # Scope to specific document IDs if requested
     if document_ids:
-        search_kwargs["filter"] = Filter(
-            must=[
-                FieldCondition(
-                    key="metadata.doc_id",
-                    match=MatchAny(any=document_ids),
-                )
-            ]
+        filter_conditions.append(
+            FieldCondition(
+                key="metadata.doc_id",
+                match=MatchAny(any=document_ids),
+            )
         )
+
+    # Always enforce user + chat isolation when provided
+    if user_id:
+        filter_conditions.append(
+            FieldCondition(key="metadata.user_id", match=MatchValue(value=user_id))
+        )
+    if chat_id:
+        filter_conditions.append(
+            FieldCondition(key="metadata.chat_id", match=MatchValue(value=chat_id))
+        )
+
+    search_kwargs: dict[str, Any] = {}
+    if filter_conditions:
+        search_kwargs["filter"] = Filter(must=filter_conditions)
 
     results = await store.asimilarity_search_with_score(query, k=k, **search_kwargs)
 
@@ -65,3 +83,4 @@ async def retrieve_documents(
 
     logger.info("retrieve_documents: query=%r k=%d → %d chunks", query[:60], k, len(chunks))
     return chunks
+

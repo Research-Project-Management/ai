@@ -7,6 +7,7 @@ import os
 import uuid
 
 from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
+from fastapi.responses import JSONResponse
 
 from app.models import DocumentInfo
 from app.rag.ingestion import ingest_docx, ingest_pdf, ingest_text, ingest_xlsx
@@ -32,6 +33,8 @@ async def upload_document(
     file: UploadFile = File(...),
     title: str = Form(None),
     tags: str = Form(""),
+    user_id: str = Form(""),
+    chat_id: str = Form(""),
 ):
     """
     Upload a document and ingest into the vector store.
@@ -71,19 +74,19 @@ async def upload_document(
 
     # Route to the appropriate ingester
     if ext == ".pdf":
-        result = await ingest_pdf(file_path, metadata)
+        result = await ingest_pdf(file_path, metadata, user_id=user_id, chat_id=chat_id)
     elif ext == ".docx":
-        result = await ingest_docx(file_path, metadata)
+        result = await ingest_docx(file_path, metadata, user_id=user_id, chat_id=chat_id)
     elif ext in (".xlsx", ".xls"):
-        result = await ingest_xlsx(file_path, metadata)
+        result = await ingest_xlsx(file_path, metadata, user_id=user_id, chat_id=chat_id)
     elif ext in _TEXT_EXTENSIONS:
         text_content = content.decode("utf-8", errors="ignore")
-        result = await ingest_text(text_content, file.filename or "upload", metadata)
+        result = await ingest_text(text_content, file.filename or "upload", metadata, user_id=user_id, chat_id=chat_id)
     else:
         # Unknown extension — attempt UTF-8 text decode as best-effort
         logger.warning("Unknown extension %r — attempting plain-text ingestion", ext)
         text_content = content.decode("utf-8", errors="ignore")
-        result = await ingest_text(text_content, file.filename or "upload", metadata)
+        result = await ingest_text(text_content, file.filename or "upload", metadata, user_id=user_id, chat_id=chat_id)
 
     logger.info("Uploaded document: %s (%d chunks)", result["title"], result["chunk_count"])
 
@@ -153,6 +156,49 @@ async def list_documents():
                 )
             )
     return docs
+
+
+@router.delete("/by-chat/{chat_id}")
+async def delete_documents_by_chat(
+    chat_id: str,
+    user_id: str = Query(..., description="Owner user ID — must match the uploader"),
+):
+    """
+    Delete all Qdrant chunks that belong to a specific chat session.
+
+    Called automatically by RPM-BE when a chat is deleted so that
+    documents cannot leak to other sessions.
+    """
+    from qdrant_client.models import FieldCondition, Filter, MatchValue
+
+    from app.config import get_settings
+    from app.rag.store import get_qdrant_client
+
+    client = get_qdrant_client()
+    settings = get_settings()
+
+    delete_filter = Filter(
+        must=[
+            FieldCondition(key="metadata.chat_id", match=MatchValue(value=chat_id)),
+            FieldCondition(key="metadata.user_id", match=MatchValue(value=user_id)),
+        ]
+    )
+
+    result = client.delete(
+        collection_name=settings.qdrant_collection,
+        points_selector=delete_filter,
+    )
+
+    logger.info(
+        "Deleted Qdrant chunks for chat_id=%s user_id=%s — status=%s",
+        chat_id,
+        user_id,
+        result.status,
+    )
+
+    return JSONResponse(
+        content={"deleted": True, "chat_id": chat_id, "status": str(result.status)}
+    )
 
 
 @router.get("/{doc_id}")

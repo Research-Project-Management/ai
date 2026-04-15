@@ -97,6 +97,8 @@ class PipelineState(TypedDict, total=False):
     document_ids: list[str]
     web_search_sites: list[str]
     metadata: dict[str, Any]
+    user_id: str  # Authenticated user — used for RAG isolation
+    chat_id: str  # Current chat session — used for RAG isolation
 
     # Quick replies (greeting/end — chat.py sends this directly)
     early_reply: str
@@ -465,10 +467,18 @@ async def rag_node(state: PipelineState) -> dict:
     try:
         from app.rag.retriever import retrieve_documents
 
+        # Read isolation context from pipeline state
+        user_id = state.get("user_id") or ""
+        chat_id = state.get("chat_id") or ""
+
         chunks = await retrieve_documents(
-            rag_query, k=rag_k, document_ids=document_ids or None
+            rag_query,
+            k=rag_k,
+            document_ids=document_ids or None,
+            user_id=user_id or None,
+            chat_id=chat_id or None,
         )
-        logger.info("Retrieved %d chunks", len(chunks))
+        logger.info("Retrieved %d chunks (user=%s chat=%s)", len(chunks), user_id, chat_id)
     except Exception as exc:
         logger.warning("RAG retrieval failed: %s", exc)
         chunks = []

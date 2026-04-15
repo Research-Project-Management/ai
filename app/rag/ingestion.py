@@ -25,7 +25,12 @@ splitter = RecursiveCharacterTextSplitter(
 )
 
 
-async def ingest_pdf(file_path: str, metadata: dict[str, Any] | None = None) -> dict:
+async def ingest_pdf(
+    file_path: str,
+    metadata: dict[str, Any] | None = None,
+    user_id: str = "",
+    chat_id: str = "",
+) -> dict:
     """
     Ingest a PDF file: parse → chunk → embed → store in Qdrant.
 
@@ -45,12 +50,20 @@ async def ingest_pdf(file_path: str, metadata: dict[str, Any] | None = None) -> 
         "source": source_name,
         "type": "pdf",
         **(metadata or {}),
+        # Always override — must not be controllable by caller
+        "user_id": user_id,
+        "chat_id": chat_id,
     }
 
     return await _ingest_text(text, base_metadata, doc_id)
 
 
-async def ingest_docx(file_path: str, metadata: dict[str, Any] | None = None) -> dict:
+async def ingest_docx(
+    file_path: str,
+    metadata: dict[str, Any] | None = None,
+    user_id: str = "",
+    chat_id: str = "",
+) -> dict:
     """
     Ingest a Word document (.docx): extract paragraphs + tables → chunk → store.
 
@@ -84,11 +97,19 @@ async def ingest_docx(file_path: str, metadata: dict[str, Any] | None = None) ->
         "source": source_name,
         "type": "docx",
         **(metadata or {}),
+        # Always override — must not be controllable by caller
+        "user_id": user_id,
+        "chat_id": chat_id,
     }
     return await _ingest_text(text, base_metadata, doc_id)
 
 
-async def ingest_xlsx(file_path: str, metadata: dict[str, Any] | None = None) -> dict:
+async def ingest_xlsx(
+    file_path: str,
+    metadata: dict[str, Any] | None = None,
+    user_id: str = "",
+    chat_id: str = "",
+) -> dict:
     """
     Ingest an Excel spreadsheet (.xlsx/.xls): read all sheets → chunk → store.
 
@@ -115,6 +136,9 @@ async def ingest_xlsx(file_path: str, metadata: dict[str, Any] | None = None) ->
         "source": source_name,
         "type": "xlsx",
         **(metadata or {}),
+        # Always override — must not be controllable by caller
+        "user_id": user_id,
+        "chat_id": chat_id,
     }
     return await _ingest_text(text, base_metadata, doc_id)
 
@@ -123,6 +147,8 @@ async def ingest_text(
     text: str,
     source_name: str = "manual",
     metadata: dict[str, Any] | None = None,
+    user_id: str = "",
+    chat_id: str = "",
 ) -> dict:
     """Ingest raw text content."""
     doc_id = str(uuid.uuid4())
@@ -131,6 +157,9 @@ async def ingest_text(
         "source": source_name,
         "type": "text",
         **(metadata or {}),
+        # Always override — must not be controllable by caller
+        "user_id": user_id,
+        "chat_id": chat_id,
     }
     return await _ingest_text(text, base_metadata, doc_id)
 
