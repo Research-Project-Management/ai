@@ -420,6 +420,14 @@ async def supervisor_node(state: PipelineState) -> dict:
     if not kb_available and route == "rag":
         route = "web_search" if web_search_enabled else "chat"
 
+    # ─── Web search override ───
+    # If web is enabled and LLM chose "chat" (general knowledge fallback),
+    # we can do better by actually searching the web. This handles cases where
+    # the user explicitly turned on web search but asked a general question.
+    if web_search_enabled and route == "chat":
+        logger.info("Web enabled + chat route → upgrading to web_search")
+        route = "web_search"
+
     logger.info("Supervisor final: route=%s", route)
     return {
         "route": route,

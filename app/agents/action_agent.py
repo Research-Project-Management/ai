@@ -25,10 +25,25 @@ from app.agents.registry import register_agent
 logger = logging.getLogger(__name__)
 
 
-# Sensitive tools that require user confirmation
+# Sensitive tools that require user confirmation before execution
 CONFIRM_REQUIRED_TOOLS = {
+    # Tasks
     "delete_task",
     "update_task",
+    # Pages
+    "delete_page",
+    "update_page",
+    # Cycles
+    "delete_cycle",
+    "update_cycle",
+    # Stickies
+    "delete_sticky",
+    # Tags
+    "delete_tag",
+    # Project management
+    "remove_project_member",
+    "update_project",
+    "update_member_role",
 }
 
 
