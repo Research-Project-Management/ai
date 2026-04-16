@@ -20,4 +20,6 @@ services:
         "--reload",
       ]
     restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     # Qdrant Cloud + Redis local đã có sẵn, không cần depends_on
