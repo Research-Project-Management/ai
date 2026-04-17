@@ -27,9 +27,20 @@ class Settings(BaseSettings):
     qdrant_api_key: str = ""
     qdrant_collection: str = "flux_documents"
 
-    # Reranker (CrossEncoder)
-    cross_encoder_model: str = "BAAI/bge-reranker-v2-m3"
-    enable_reranking: bool = True
+    # Reranker — chọn provider:
+    # "none"  = tắt, dùng Qdrant similarity score thuần (mặc định — nhanh, không cần model)
+    # "jina"  = Jina Reranker API (1M tokens/tháng free, ~80ms, khuyến nghị)
+    # "cohere"= Cohere Rerank API (100 reranks/min free)
+    # "local" = CrossEncoder local (BAAI/bge-reranker-v2-m3, 2.27GB, chậm)
+    reranker_provider: str = "none"
+    jina_api_key: str = ""
+    cohere_api_key: str = ""
+    cross_encoder_model: str = "BAAI/bge-reranker-v2-m3"  # chỉ dùng khi reranker_provider="local"
+
+    # Legacy — kept for backward compat (maps to reranker_provider != "none")
+    @property
+    def enable_reranking(self) -> bool:
+        return self.reranker_provider not in ("none", "")
 
     # Web Search
     tavily_api_key: str = ""

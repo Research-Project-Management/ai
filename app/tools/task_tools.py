@@ -2,9 +2,51 @@
 
 from __future__ import annotations
 
+import re
+
 from langchain_core.tools import tool
 
-from app.tools._client import flux_api, get_workspace_id
+from app.tools._client import flux_api, get_workspace_id, get_project_id
+
+# MongoDB ObjectId: 24-char hex string
+_OID_RE = re.compile(r'^[0-9a-fA-F]{24}$')
+_PLACEHOLDER_VALUES = {
+    "", "none", "null", "undefined",
+    "project_id_not_specified", "not_specified", "not specified",
+    "task_id_not_specified",
+}
+
+
+def _is_valid_oid(value: str) -> bool:
+    """Return True only if value looks like a real MongoDB ObjectId."""
+    return bool(value and _OID_RE.match(value) and value.lower() not in _PLACEHOLDER_VALUES)
+
+
+def _slim_task(task: dict) -> dict:
+    """Strip heavy/unused fields from a task object to reduce LLM token usage.
+
+    Only keeps the fields the agent actually needs to reason about tasks.
+    Removes: content, description, checklists, attachments, permissions,
+             createdAt, updatedAt, rank, reminder, recurrence, estimate, labels.
+    """
+    assignee = task.get("assignee")
+    return {
+        "id": str(task.get("_id", "")),
+        "identifier": task.get("identifier", ""),
+        "title": task.get("title", ""),
+        "columnId": task.get("columnId", ""),
+        "priority": task.get("priority", "none"),
+        "completed": task.get("completed", False),
+        "isOverdue": task.get("isOverdue", False),
+        "dueState": task.get("dueState", "none"),
+        "dueDate": task.get("dueDate"),
+        "startDate": task.get("startDate"),
+        "assignee": {"id": str(assignee.get("_id", "")), "name": assignee.get("name", "")} if assignee else None,
+        "commentCount": task.get("commentCount", 0),
+        "cycle": task.get("cycle"),
+        "parentTask": task.get("parentTask"),
+    }
+
 
 
 @tool
@@ -14,21 +56,51 @@ async def list_tasks(project_id: str) -> dict:
     Use this to get an overview of the project's task board, check what tasks exist,
     or gather data before creating/updating tasks.
 
+    IMPORTANT: project_id must be a real 24-char hex MongoDB ObjectId.
+    If you don’t have it, call list_projects first.
+
     Args:
         project_id: MongoDB ObjectId of the project.
     """
-    return await flux_api.get(f"/api/project/{project_id}/tasks")
+    # Fallback to context project if not provided
+    if not project_id or project_id.lower() in _PLACEHOLDER_VALUES:
+        project_id = get_project_id()
+
+    if not _is_valid_oid(project_id):
+        return {
+            "error": True,
+            "message": (
+                f"Invalid project_id '{project_id}'. "
+                "Please call list_projects first to get valid project IDs."
+            ),
+        }
+    result = await flux_api.get(f"/api/project/{project_id}/tasks")
+    # Slim down task objects — gập bớt các field nặng không cần thiết cho LLM
+    if isinstance(result, dict) and not result.get("error"):
+        tasks = result.get("tasks", [])
+        result = {
+            "tasks": [_slim_task(t) for t in tasks],
+            "columns": result.get("columns", []),
+            "projectName": result.get("projectName", ""),
+            "total": len(tasks),
+        }
+    return result
 
 
 @tool
 async def get_my_tasks(workspace_id: str = "") -> dict:
-    """Get all tasks assigned to the currently logged-in user across ALL projects in the workspace.
+    """Get all tasks assigned to the currently logged-in user across ALL projects.
 
     Use this when the user asks:
     - "task của tôi là gì?"
     - "tôi đang làm gì?"
     - "tóm tắt công việc của tôi"
     - "show my tasks"
+
+    NOTE: This returns ONLY tasks where the current user is the assignee.
+    Tasks created without explicitly assigning them will be auto-assigned to the
+    creator (so they WILL appear here). Use list_tasks(project_id) to see ALL
+    tasks in a project regardless of assignee.
 
     Returns tasks with project info, status (columnId), priority, dueDate.
 
@@ -38,7 +110,14 @@ async def get_my_tasks(workspace_id: str = "") -> dict:
     ws = workspace_id or get_workspace_id()
     if not ws:
         return {"error": True, "message": "workspace_id is required"}
-    return await flux_api.get(f"/api/workspace/{ws}/tasks")
+    result = await flux_api.get(f"/api/workspace/{ws}/tasks")
+    if isinstance(result, dict) and not result.get("error"):
+        tasks = result.get("tasks", [])
+        result = {
+            "tasks": [_slim_task(t) for t in tasks],
+            "total": len(tasks),
+        }
+    return result
 
 
 @tool
@@ -56,6 +135,14 @@ async def summarize_member_tasks(project_id: str, member_name: str) -> dict:
         project_id: MongoDB ObjectId of the project.
         member_name: Name (full or partial) of the team member to filter by.
     """
+    if not project_id or project_id.lower() in _PLACEHOLDER_VALUES:
+        project_id = get_project_id()
+
+    if not _is_valid_oid(project_id):
+        return {
+            "error": True,
+            "message": f"Invalid project_id '{project_id}'. Call list_projects first.",
+        }
     result = await flux_api.get(f"/api/project/{project_id}/tasks")
     if isinstance(result, dict) and result.get("error"):
         return result
@@ -123,15 +210,17 @@ async def create_task(
 ) -> dict:
     """Create a new task in a project.
 
-    Use this to create tasks for team members. Always check list_members first
-    if you need to assign a task to someone.
+    IMPORTANT: If no assignee_id is provided, the task is automatically
+    assigned to the current user. After creating, use list_tasks(project_id)
+    to verify the result — NOT get_my_tasks (which may have different scope).
 
     Args:
         project_id: MongoDB ObjectId of the project.
         title: Task title (required, descriptive).
         description: Task description (supports markdown).
         priority: One of "urgent", "high", "medium", "low", "none".
-        assignee_id: MongoDB ObjectId of the user to assign. Get from list_members.
+        assignee_id: MongoDB ObjectId of the user to assign. If omitted,
+                     the task is assigned to the current user automatically.
         due_date: ISO date string (YYYY-MM-DD) for the deadline.
         start_date: ISO date string (YYYY-MM-DD) for the start date.
         column_id: Board column — "backlog", "todo", "in_progress", or "done".
@@ -143,6 +232,11 @@ async def create_task(
         "title": title,
         "columnId": column_id,
     }
+    if not _is_valid_oid(project_id):
+        return {
+            "error": True,
+            "message": f"Invalid project_id '{project_id}'. Call list_projects first to get a valid ID.",
+        }
     if description:
         body["description"] = description
     if priority != "none":

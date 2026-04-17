@@ -104,38 +104,135 @@ class PipelineState(TypedDict, total=False):
     early_reply: str
 
 
-# ── Reranker (lazy-loaded, optional) ─────────────────────────────────────────
+# ── Reranker (multi-provider, optional) ─────────────────────────────────────
+#
+# Provider priority: jina → cohere → local CrossEncoder → none
+# Configure via RERANKER_PROVIDER in .env
+
+
+async def _rerank_chunks_jina(query: str, chunks: list[dict], top_k: int, api_key: str) -> list[dict]:
+    """Rerank using Jina Reranker API (~80ms, no local model, 1M tokens/month free)."""
+    import httpx
+    documents = [(c.get("content", ""))[:2000] for c in chunks]
+    async with httpx.AsyncClient(timeout=15) as client:
+        resp = await client.post(
+            "https://api.jina.ai/v1/rerank",
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            json={
+                "model": "jina-reranker-v2-base-multilingual",
+                "query": query,
+                "documents": documents,
+                "top_n": top_k,
+            },
+        )
+        if resp.status_code != 200:
+            logger.warning("Jina reranker error %d — using original order", resp.status_code)
+            return chunks[:top_k]
+        results = resp.json().get("results", [])
+        # results: [{index: int, relevance_score: float, ...}]
+        ranked = sorted(results, key=lambda r: r.get("relevance_score", 0), reverse=True)
+        return [chunks[r["index"]] for r in ranked if r["index"] < len(chunks)]
+
+
+async def _rerank_chunks_cohere(query: str, chunks: list[dict], top_k: int, api_key: str) -> list[dict]:
+    """Rerank using Cohere Rerank API (100 reranks/min free tier)."""
+    import httpx
+    documents = [(c.get("content", ""))[:2000] for c in chunks]
+    async with httpx.AsyncClient(timeout=15) as client:
+        resp = await client.post(
+            "https://api.cohere.com/v2/rerank",
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            json={
+                "model": "rerank-v3.5",
+                "query": query,
+                "documents": documents,
+                "top_n": top_k,
+            },
+        )
+        if resp.status_code != 200:
+            logger.warning("Cohere reranker error %d — using original order", resp.status_code)
+            return chunks[:top_k]
+        results = resp.json().get("results", [])
+        ranked = sorted(results, key=lambda r: r.get("relevance_score", 0), reverse=True)
+        return [chunks[r["index"]] for r in ranked if r["index"] < len(chunks)]
+
+
+def _rerank_chunks_local(query: str, chunks: list[dict], top_k: int, model_name: str) -> list[dict]:
+    """Rerank using local CrossEncoder (requires 2.27GB model download)."""
+    global _reranker, _reranker_loaded
+    if not _reranker_loaded:
+        _reranker_loaded = True
+        try:
+            from sentence_transformers import CrossEncoder
+            _reranker = CrossEncoder(model_name)
+            logger.info("CrossEncoder loaded: %s", model_name)
+        except Exception as exc:
+            logger.warning("CrossEncoder load failed: %s", exc)
+
+    if not _reranker:
+        return chunks[:top_k]
+
+    pairs = [[query, (c.get("content", ""))[:2000]] for c in chunks]
+    try:
+        scores = _reranker.predict(pairs)
+        scored = sorted(zip(chunks, scores), key=lambda x: x[1], reverse=True)
+        return [c for c, _ in scored[:top_k]]
+    except Exception as exc:
+        logger.warning("CrossEncoder predict failed: %s", exc)
+        return chunks[:top_k]
+
 
 _reranker = None
 _reranker_loaded = False
 
 
-def _get_reranker():
-    """Lazy-load the CrossEncoder reranker. Returns None if unavailable."""
-    global _reranker, _reranker_loaded
-    if _reranker_loaded:
-        return _reranker
-    _reranker_loaded = True
+async def _rerank_chunks(query: str, chunks: list[dict], top_k: int = 10) -> list[dict]:
+    """Rerank retrieved chunks using the configured provider.
+
+    Providers (set RERANKER_PROVIDER in .env):
+    - "none"  : skip reranking, use Qdrant similarity order (default)
+    - "jina"  : Jina Reranker API — recommended (fast, no local model)
+    - "cohere": Cohere Rerank API
+    - "local" : CrossEncoder local model (heavy, ~2.27GB)
+    """
+    if not chunks:
+        return chunks
 
     settings = get_settings()
-    if not settings.enable_reranking:
-        logger.info("Reranking disabled via config.")
-        return None
+    provider = settings.reranker_provider.lower()
 
-    try:
-        from sentence_transformers import CrossEncoder
+    if provider == "none" or not provider:
+        return chunks[:top_k]
 
-        _reranker = CrossEncoder(settings.cross_encoder_model)
-        logger.info("CrossEncoder loaded: %s", settings.cross_encoder_model)
-    except ImportError:
-        logger.warning(
-            "sentence-transformers not installed — reranking disabled. "
-            "Install with: pip install sentence-transformers"
+    if provider == "jina":
+        if not settings.jina_api_key:
+            logger.warning("JINA_API_KEY not set — skipping reranking")
+            return chunks[:top_k]
+        try:
+            return await _rerank_chunks_jina(query, chunks, top_k, settings.jina_api_key)
+        except Exception as exc:
+            logger.warning("Jina reranker failed: %s — using original order", exc)
+            return chunks[:top_k]
+
+    if provider == "cohere":
+        if not settings.cohere_api_key:
+            logger.warning("COHERE_API_KEY not set — skipping reranking")
+            return chunks[:top_k]
+        try:
+            return await _rerank_chunks_cohere(query, chunks, top_k, settings.cohere_api_key)
+        except Exception as exc:
+            logger.warning("Cohere reranker failed: %s — using original order", exc)
+            return chunks[:top_k]
+
+    if provider == "local":
+        # Run in thread to avoid blocking asyncio event loop
+        import asyncio
+        return await asyncio.to_thread(
+            _rerank_chunks_local, query, chunks, top_k, settings.cross_encoder_model
         )
-    except Exception as exc:
-        logger.warning("Failed to load CrossEncoder: %s", exc)
 
-    return _reranker
+    logger.warning("Unknown reranker_provider '%s' — skipping reranking", provider)
+    return chunks[:top_k]
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -174,21 +271,6 @@ def _is_summarize(text: str) -> bool:
     """Detect summarisation requests in Vietnamese + English."""
     return bool(_SUMMARIZE_RE.search(text))
 
-
-def _rerank_chunks(query: str, chunks: list[dict], top_k: int = 10) -> list[dict]:
-    """Rerank retrieved chunks using CrossEncoder (if available)."""
-    reranker = _get_reranker()
-    if not reranker or not chunks:
-        return chunks[:top_k]
-
-    pairs = [[query, (c.get("content", ""))[:2000]] for c in chunks]
-    try:
-        scores = reranker.predict(pairs)
-        scored = sorted(zip(chunks, scores), key=lambda x: x[1], reverse=True)
-        return [c for c, _ in scored[:top_k]]
-    except Exception as exc:
-        logger.warning("Rerank failed: %s — using original order", exc)
-        return chunks[:top_k]
 
 
 def _format_rag_context(
@@ -500,11 +582,10 @@ async def rag_node(state: PipelineState) -> dict:
             "sources": [],
         }
 
-    # Rerank (optional)
-    chunks = await asyncio.to_thread(
-        _rerank_chunks, query_en, chunks, min(10, len(chunks))
-    )
+    # Rerank (optional) — provider configured via RERANKER_PROVIDER in .env
+    chunks = await _rerank_chunks(query_en, chunks, min(10, len(chunks)))
     logger.info("After rerank: %d chunks", len(chunks))
+
 
     # Format context
     rag_context = _format_rag_context(chunks)

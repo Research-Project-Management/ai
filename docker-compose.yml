@@ -6,18 +6,23 @@ services:
     ports:
       - "${PORT:-3000}:3000"
     env_file: .env
+    environment:
+      # Số worker processes — mỗi worker xử lý 1 asyncio event loop độc lập.
+      # Dev: 1 worker (--reload để hot-reload)
+      # Prod: 4 workers (true parallelism, handle nhiều user đồng thời)
+      UVICORN_WORKERS: "${UVICORN_WORKERS:-4}"
     volumes:
       - ./uploads:/app/uploads
-      - ./app:/app/app # Hot-reload source
+      - /root/.cache/huggingface:/root/.cache/huggingface  # Cache CrossEncoder model
     command:
       [
         "uvicorn",
         "app.main:app",
-        "--host",
-        "0.0.0.0",
-        "--port",
-        "3000",
-        "--reload",
+        "--host", "0.0.0.0",
+        "--port", "3000",
+        "--workers", "${UVICORN_WORKERS:-4}",
+        "--loop", "uvloop",
+        "--http", "httptools",
       ]
     restart: unless-stopped
     extra_hosts:

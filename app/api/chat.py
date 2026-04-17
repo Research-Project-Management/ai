@@ -26,6 +26,7 @@ from fastapi.responses import StreamingResponse
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from app.agents.graph import PipelineState, get_pipeline
+from app.agents.orchestrator import stream_orchestrator
 from app.agents.registry import get_agent
 from app.config import get_agent_llm, get_llm
 from app.models import AgentOutput, ChatRequest, ChatResponse
@@ -33,6 +34,33 @@ from app.models import AgentOutput, ChatRequest, ChatResponse
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["chat"])
+
+
+# ── Token extractor ──────────────────────────────────────────────
+
+def _extract_token(content) -> str:
+    """Safely extract text from a LangChain chunk's content.
+
+    Handles:
+    - ``str`` — returned as-is
+    - ``list`` of content blocks (Anthropic / Groq structured format):
+      e.g. [{'type': 'text', 'text': 'Hello'}, {'type': 'text', 'text': ' world'}]
+    - Anything else — str() conversion (should not normally happen)
+    """
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for block in content:
+            if isinstance(block, dict):
+                if block.get("type") == "text":
+                    parts.append(block.get("text", ""))
+                # ignore non-text block types (e.g. tool_use, thinking)
+            elif isinstance(block, str):
+                parts.append(block)
+        return "".join(parts)
+    # fallback — avoid Python repr of complex objects
+    return ""
 
 
 # ── System Prompt Builder ────────────────────────────────────────────────────
@@ -230,7 +258,7 @@ async def _stream_action_agent(messages: list, request: ChatRequest):
         elif kind == "on_chat_model_stream":
             chunk = event.get("data", {}).get("chunk")
             if chunk and hasattr(chunk, "content") and chunk.content:
-                token = chunk.content if isinstance(chunk.content, str) else str(chunk.content)
+                token = _extract_token(chunk.content)
                 if token:
                     yield f"data: {token.replace(chr(10), chr(92) + 'n')}\n\n"
 
@@ -304,16 +332,16 @@ async def chat(request: ChatRequest):
                         yield "data: [DONE]\n\n"
                         return
 
-                    # ── ACTION AGENT ROUTE ──────────────────────────
+                    # ── ACTION AGENT ROUTE (A2A Orchestrator) ───────────────
                     if route == "action":
-                        yield f"data: [META]{json.dumps({'agent': 'action', 'intent': 'action'})}\n\n"
+                        yield f"data: [META]{json.dumps({'agent': 'orchestrator', 'intent': 'action'})}\n\n"
 
-                        # Stream the action agent (ReAct loop)
-                        async for event_data in _stream_action_agent(messages, request):
+                        # Stream qua A2A Orchestrator (delegate sang sub-agents)
+                        async for event_data in stream_orchestrator(messages, request):
                             yield event_data
 
                         # Final META
-                        yield f"data: [META]{json.dumps({'agent': 'action', 'intent': 'action', 'sources': []})}\n\n"
+                        yield f"data: [META]{json.dumps({'agent': 'orchestrator', 'intent': 'action', 'sources': []})}\n\n"
                         yield "data: [DONE]\n\n"
                         return
 
@@ -353,11 +381,7 @@ async def chat(request: ChatRequest):
             llm_messages = [SystemMessage(content=system_prompt)] + messages
 
             async for chunk in llm.astream(llm_messages):
-                token = (
-                    chunk.content
-                    if isinstance(chunk.content, str)
-                    else str(chunk.content)
-                )
+                token = _extract_token(chunk.content)
                 if token:
                     yield f"data: {token.replace(chr(10), chr(92) + 'n')}\n\n"
 

@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup / shutdown events."""
+    import asyncio
     settings = get_settings()
 
     # Configure logging
@@ -41,9 +42,37 @@ async def lifespan(app: FastAPI):
         ", ".join(registered.keys()),
     )
 
+    # Pre-warm CrossEncoder reranker in background (non-blocking startup).
+    # Without this, the first RAG request would block while downloading ~2.27GB.
+    if settings.enable_reranking:
+        async def _prewarm_reranker():
+            try:
+                await asyncio.to_thread(__import__("app.agents.graph", fromlist=["_get_reranker"])._get_reranker)
+                logger.info("🔥 CrossEncoder reranker pre-warmed.")
+            except Exception as exc:
+                logger.warning("⚠️  CrossEncoder pre-warm failed (non-fatal): %s", exc)
+
+        asyncio.create_task(_prewarm_reranker())
+
+    # Pre-warm orchestrator imports (sub-agents, tools) to avoid cold-start latency
+    try:
+        import app.agents.orchestrator  # noqa: F401
+        logger.info("🔥 Orchestrator pre-imported.")
+    except Exception as exc:
+        logger.warning("Orchestrator pre-import failed: %s", exc)
+
     yield
 
+    # ── Shutdown ──────────────────────────────────────────────────
     logger.info("👋 Flux-AI shutting down")
+
+    # Gracefully close the httpx connection pool
+    try:
+        from app.tools._client import flux_api
+        await flux_api.close()
+        logger.info("🔌 HTTP connection pool closed.")
+    except Exception:
+        pass
 
 
 def create_app() -> FastAPI:

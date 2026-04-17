@@ -54,9 +54,10 @@ to perform actions in the user's workspace.
 ## Context
 - **Current time**: {current_time}
 - **Workspace ID**: {workspace_id}
-- **Project ID**: {project_id} (empty means no specific project context)
+- **Active Project ID**: {project_id}
 - **User ID**: {user_id}
 
+{project_instruction}
 ## Capabilities
 You can:
 - Create, update, and delete tasks
@@ -89,7 +90,10 @@ You can:
 10. For batch operations (e.g., "create 5 tasks"), execute each one and summarize all results.
 
 ## Tool Usage Tips
-- `project_id` params expect MongoDB ObjectId strings (24-char hex).
+- `project_id` params expect **real MongoDB ObjectId strings** (24-char hex, e.g. `507f1f77bcf86cd799439011`).
+  - If **Active Project ID** is available above, use it directly — do NOT call list_projects first.
+  - Only call `list_projects` when no Active Project ID is set.
+  - **NEVER** pass placeholder values like `project_id_not_specified`, `none`, `not_specified`, etc.
 - `due_date` and `start_date` must be ISO format: YYYY-MM-DD
 - `priority` is one of: urgent, high, medium, low, none
 - `column_id` is one of: backlog, todo, in_progress, done
@@ -103,11 +107,28 @@ def build_action_prompt(
     user_id: str = "",
 ) -> str:
     """Build the system prompt for the action agent with runtime context."""
+    # Hiển thị rõ ràng để LLM không tự điền placeholder vào params
+    proj_display = project_id if project_id else "none"
+
+    if project_id:
+        project_instruction = (
+            f"⚡ **ACTIVE PROJECT**: The user is currently working in project `{project_id}`.\n"
+            f"- When the user asks about tasks, members, cycles, or anything project-related,\n"
+            f"  **use `{project_id}` as the `project_id` directly** — do NOT call `list_projects` first.\n"
+            f"- Only switch to a different project if the user explicitly asks for another project.\n\n"
+        )
+    else:
+        project_instruction = (
+            "ℹ️ **No project selected**: The user has not selected a specific project.\n"
+            "- If the user asks about project tasks/members, call `list_projects` first to let them choose.\n\n"
+        )
+
     return ACTION_SYSTEM_PROMPT.format(
         current_time=datetime.now(timezone.utc).isoformat(),
         workspace_id=workspace_id or "not specified",
-        project_id=project_id or "not specified",
+        project_id=proj_display,
         user_id=user_id or "unknown",
+        project_instruction=project_instruction,
     )
 
 
