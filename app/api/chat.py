@@ -362,26 +362,45 @@ async def chat(request: ChatRequest):
                         return
 
                     # ── LATEX EDITOR AGENT ROUTE ─────────────────────────────
-                    # Builds its own context-aware system prompt using file_content,
-                    # selection, and cursor_context from the request metadata.
+                    # Uses real LLM astream (token-by-token) instead of blocking
+                    # agent.run() + word-split chunking.
                     if route == "latex_editor":
-                        from app.agents.latex_editor_agent import LaTeXEditorAgent
+                        from app.agents.latex_editor_agent import (
+                            LATEX_EDITOR_PROMPT,
+                            _build_selection_context,
+                            _truncate_file_content,
+                        )
                         yield f"data: [META]{json.dumps({'agent': 'latex_editor', 'intent': 'latex_editor'})}\n\n"
 
-                        editor_agent = LaTeXEditorAgent()
-                        agent_state: dict = {
-                            "messages": messages,
-                            "metadata": metadata,
-                        }
-                        result_state = await editor_agent.run(agent_state)
-                        content = result_state.get("agent_output", {}).get("content", "")
+                        # Extract editor context from metadata
+                        file_content = metadata.get("file_content", "")
+                        filename = metadata.get("filename", "document.tex")
+                        selection = metadata.get("selection", "")
+                        cursor_context = metadata.get("cursor_context", "")
+                        truncated = _truncate_file_content(file_content) if file_content else "(empty document)"
+                        selection_ctx = _build_selection_context(selection, cursor_context)
 
-                        # Stream the content token by token (word-level chunking)
-                        words = content.split(" ")
-                        for i, word in enumerate(words):
-                            chunk = word + (" " if i < len(words) - 1 else "")
-                            if chunk:
-                                yield f"data: {chunk.replace(chr(10), chr(92) + 'n')}\n\n"
+                        # Get last user message
+                        request_text = ""
+                        for msg in reversed(messages):
+                            if hasattr(msg, "type") and msg.type == "human":
+                                request_text = msg.content
+                                break
+                        if not request_text and messages:
+                            request_text = str(messages[-1].content)
+
+                        # Real token-by-token streaming via LLM astream
+                        llm = get_llm()
+                        chain = LATEX_EDITOR_PROMPT | llm
+                        async for chunk in chain.astream({
+                            "filename": filename,
+                            "file_content": truncated,
+                            "selection_context": selection_ctx,
+                            "request": request_text,
+                        }):
+                            token = _extract_token(chunk.content) if hasattr(chunk, "content") else ""
+                            if token:
+                                yield f"data: {token.replace(chr(10), chr(92) + 'n')}\n\n"
 
                         yield f"data: [META]{json.dumps({'agent': 'latex_editor', 'intent': 'latex_editor', 'sources': []})}\n\n"
                         yield "data: [DONE]\n\n"
