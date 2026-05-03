@@ -96,7 +96,13 @@ def get_llm(temperature: float = 0.7, model: str | None = None, provider: str | 
     active_provider = provider or settings.llm_provider
 
     if active_provider == "ollama":
-        from langchain_ollama import ChatOllama
+        try:
+            from langchain_ollama import ChatOllama  # noqa: PLC0415
+        except ImportError:
+            raise RuntimeError(
+                "langchain-ollama is not installed. "
+                "Run: pip install langchain-ollama  (or see requirements-optional.txt)"
+            )
         return ChatOllama(
             model=model or settings.ollama_model,
             base_url=settings.ollama_base_url,
@@ -104,7 +110,13 @@ def get_llm(temperature: float = 0.7, model: str | None = None, provider: str | 
         )
 
     if active_provider == "groq":
-        from langchain_groq import ChatGroq
+        try:
+            from langchain_groq import ChatGroq  # noqa: PLC0415
+        except ImportError:
+            raise RuntimeError(
+                "langchain-groq is not installed. "
+                "Run: pip install langchain-groq  (or see requirements-optional.txt)"
+            )
         return ChatGroq(
             model=model or settings.groq_model,
             api_key=settings.groq_api_key,

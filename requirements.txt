@@ -1,37 +1,37 @@
-# Web Search
-duckduckgo-search>=7.0.0
-
-# Core
+# ── Core web framework ────────────────────────────────────────────────────────
 fastapi[standard]>=0.115.0
 uvicorn[standard]>=0.34.0
 pydantic-settings>=2.7.0
 python-dotenv>=1.1.0
 python-multipart>=0.0.20
 
-# LangChain + LangGraph
+# ── LangChain + LangGraph ─────────────────────────────────────────────────────
 langchain-core>=0.3.0
-langchain-google-genai>=2.1.0
-langchain-ollama>=0.2.0
-langchain-groq>=0.3.0
+langchain-google-genai>=2.1.0   # Primary: Gemini (default)
 langgraph>=0.3.0
+langchain-text-splitters>=0.3.0
 
-# Vector Store
-qdrant-client>=1.13.0
+# ── Vector Store ──────────────────────────────────────────────────────────────
+qdrant-client[fastembed]>=1.13.0
 langchain-qdrant>=0.2.0
 
-# Redis
+# ── Redis (chat history / cache) ──────────────────────────────────────────────
 redis>=5.0.0
 
-# Document Processing
+# ── Document Processing ───────────────────────────────────────────────────────
 pypdf>=5.0.0
 python-docx>=1.1.2
 openpyxl>=3.1.0
-langchain-text-splitters>=0.3.0
 
-# Reranking (optional — system works without it, but with lower quality)
-sentence-transformers>=3.0.0
+# ── Web Search ────────────────────────────────────────────────────────────────
+duckduckgo-search>=7.0.0
+httpx>=0.28.0
 
-# Testing
+# ── Testing ───────────────────────────────────────────────────────────────────
 pytest>=8.0.0
 pytest-asyncio>=0.25.0
-httpx>=0.28.0
+
+# ── OPTIONAL providers — install only what you use (see requirements-optional.txt) ──
+# langchain-ollama     # local Ollama — LLM_PROVIDER=ollama
+# langchain-groq       # Groq cloud  — LLM_PROVIDER=groq
+# sentence-transformers # local reranker — RERANKER_PROVIDER=local (~3GB torch)

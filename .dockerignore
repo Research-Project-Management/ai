@@ -1,0 +1,13 @@
+.venv
+__pycache__
+*.pyc
+*.pyo
+.git
+.gitignore
+tests
+.env
+*.md
+*.log
+.pytest_cache
+.mypy_cache
+requirements-optional.txt
