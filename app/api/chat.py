@@ -135,6 +135,17 @@ def _build_system_prompt(
             "- Ensure the output is valid and compilable"
         )
 
+    if intent == "latex_editor":
+        # LaTeX editor agent builds its own detailed system prompt internally.
+        # This path is used only for the final streaming pass (non-agent path).
+        # In practice, latex_editor is routed to run_agent() like other specialized agents.
+        return (
+            "You are an expert LaTeX writing assistant embedded in the Flux editor. "
+            "Help the user with their LaTeX document. "
+            "Wrap any LaTeX code in ```latex blocks. "
+            "Respond in the same language as the user."
+        )
+
     if intent == "task":
         parts = []
         if metadata.get("project_id"):
@@ -285,6 +296,11 @@ async def chat(request: ChatRequest):
         "workspace_id": request.workspace_id,
         "user_id": request.user_id,
         "chat_id": request.chat_id,
+        # LaTeX editor context — forwarded to latex_editor_agent
+        "file_content": request.file_content or "",
+        "filename": request.filename or "document.tex",
+        "selection": request.selection or "",
+        "cursor_context": request.cursor_context or "",
     }
 
     # Build initial pipeline state
@@ -342,6 +358,32 @@ async def chat(request: ChatRequest):
 
                         # Final META
                         yield f"data: [META]{json.dumps({'agent': 'orchestrator', 'intent': 'action', 'sources': []})}\n\n"
+                        yield "data: [DONE]\n\n"
+                        return
+
+                    # ── LATEX EDITOR AGENT ROUTE ─────────────────────────────
+                    # Builds its own context-aware system prompt using file_content,
+                    # selection, and cursor_context from the request metadata.
+                    if route == "latex_editor":
+                        from app.agents.latex_editor_agent import LaTeXEditorAgent
+                        yield f"data: [META]{json.dumps({'agent': 'latex_editor', 'intent': 'latex_editor'})}\n\n"
+
+                        editor_agent = LaTeXEditorAgent()
+                        agent_state: dict = {
+                            "messages": messages,
+                            "metadata": metadata,
+                        }
+                        result_state = await editor_agent.run(agent_state)
+                        content = result_state.get("agent_output", {}).get("content", "")
+
+                        # Stream the content token by token (word-level chunking)
+                        words = content.split(" ")
+                        for i, word in enumerate(words):
+                            chunk = word + (" " if i < len(words) - 1 else "")
+                            if chunk:
+                                yield f"data: {chunk.replace(chr(10), chr(92) + 'n')}\n\n"
+
+                        yield f"data: [META]{json.dumps({'agent': 'latex_editor', 'intent': 'latex_editor', 'sources': []})}\n\n"
                         yield "data: [DONE]\n\n"
                         return
 

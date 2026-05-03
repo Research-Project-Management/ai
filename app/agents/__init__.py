@@ -13,6 +13,7 @@ from app.agents.latex_agent import LaTeXAgent  # noqa: F401
 from app.agents.task_agent import TaskAgent  # noqa: F401
 from app.agents.web_search_agent import WebSearchAgent  # noqa: F401
 from app.agents.action_agent import ActionAgent  # noqa: F401
+from app.agents.latex_editor_agent import LaTeXEditorAgent  # noqa: F401
 
 # Re-export key utilities
 from app.agents.registry import get_agent, list_agents, agent_descriptions  # noqa: F401

@@ -41,6 +41,23 @@ class ChatRequest(BaseModel):
         None,
         description="Chat session ID. Documents are scoped to this session — used for RAG isolation.",
     )
+    # ── LaTeX Editor context (only sent when intent_hint='latex_editor') ──
+    file_content: str | None = Field(
+        None,
+        description="Full content of the LaTeX file currently open in the editor.",
+    )
+    filename: str | None = Field(
+        None,
+        description="Filename of the active LaTeX file (e.g. 'main.tex').",
+    )
+    selection: str | None = Field(
+        None,
+        description="Text currently selected by the user in the editor.",
+    )
+    cursor_context: str | None = Field(
+        None,
+        description="Surrounding paragraph / lines around the cursor position.",
+    )
 
 
 class DocumentUploadMeta(BaseModel):
