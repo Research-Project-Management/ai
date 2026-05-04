@@ -301,6 +301,15 @@ async def chat(request: ChatRequest):
         "filename": request.filename or "document.tex",
         "selection": request.selection or "",
         "cursor_context": request.cursor_context or "",
+        # Cursor & selection range (v2)
+        "cursor_line": request.cursor_line or 1,
+        "cursor_column": request.cursor_column or 1,
+        "selection_start_line": request.selection_start_line,
+        "selection_start_column": request.selection_start_column,
+        "selection_end_line": request.selection_end_line,
+        "selection_end_column": request.selection_end_column,
+        "document_structure": request.document_structure or "",
+        "command_hint": request.command_hint or "",
     }
 
     # Build initial pipeline state
@@ -367,7 +376,9 @@ async def chat(request: ChatRequest):
                     if route == "latex_editor":
                         from app.agents.latex_editor_agent import (
                             LATEX_EDITOR_PROMPT,
+                            _add_line_numbers,
                             _build_selection_context,
+                            _build_selection_info,
                             _truncate_file_content,
                         )
                         yield f"data: [META]{json.dumps({'agent': 'latex_editor', 'intent': 'latex_editor'})}\n\n"
@@ -377,8 +388,23 @@ async def chat(request: ChatRequest):
                         filename = metadata.get("filename", "document.tex")
                         selection = metadata.get("selection", "")
                         cursor_context = metadata.get("cursor_context", "")
+                        cursor_line = metadata.get("cursor_line") or 1
+                        cursor_column = metadata.get("cursor_column") or 1
+                        selection_start_line = metadata.get("selection_start_line")
+                        selection_start_column = metadata.get("selection_start_column")
+                        selection_end_line = metadata.get("selection_end_line")
+                        selection_end_column = metadata.get("selection_end_column")
+
                         truncated = _truncate_file_content(file_content) if file_content else "(empty document)"
-                        selection_ctx = _build_selection_context(selection, cursor_context)
+                        file_content_with_line_numbers = _add_line_numbers(truncated)
+                        selection_ctx = _build_selection_context(
+                            selection, cursor_context,
+                            selection_start_line, selection_end_line
+                        )
+                        selection_info = _build_selection_info(
+                            selection, selection_start_line, selection_start_column,
+                            selection_end_line, selection_end_column
+                        )
 
                         # Get last user message
                         request_text = ""
@@ -394,8 +420,11 @@ async def chat(request: ChatRequest):
                         chain = LATEX_EDITOR_PROMPT | llm
                         async for chunk in chain.astream({
                             "filename": filename,
-                            "file_content": truncated,
+                            "file_content_with_line_numbers": file_content_with_line_numbers,
                             "selection_context": selection_ctx,
+                            "selection_info": selection_info,
+                            "cursor_line": cursor_line,
+                            "cursor_column": cursor_column,
                             "request": request_text,
                         }):
                             token = _extract_token(chunk.content) if hasattr(chunk, "content") else ""

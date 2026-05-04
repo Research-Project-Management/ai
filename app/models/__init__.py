@@ -58,6 +58,39 @@ class ChatRequest(BaseModel):
         None,
         description="Surrounding paragraph / lines around the cursor position.",
     )
+    # ── Cursor & selection range (v2 rich context) ────────────────────────────
+    cursor_line: int | None = Field(
+        None,
+        description="1-based cursor line number in the editor.",
+    )
+    cursor_column: int | None = Field(
+        None,
+        description="1-based cursor column number in the editor.",
+    )
+    selection_start_line: int | None = Field(
+        None,
+        description="1-based start line of user selection.",
+    )
+    selection_start_column: int | None = Field(
+        None,
+        description="1-based start column of user selection.",
+    )
+    selection_end_line: int | None = Field(
+        None,
+        description="1-based end line of user selection.",
+    )
+    selection_end_column: int | None = Field(
+        None,
+        description="1-based end column of user selection.",
+    )
+    document_structure: str | None = Field(
+        None,
+        description="Summary of document LaTeX structure (sections, packages, labels).",
+    )
+    command_hint: str | None = Field(
+        None,
+        description="Slash command hint, e.g. 'fix', 'refactor', 'complete'.",
+    )
 
 
 class DocumentUploadMeta(BaseModel):
