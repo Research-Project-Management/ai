@@ -5,6 +5,7 @@ from __future__ import annotations
 from langchain_core.tools import tool
 
 from app.tools._client import flux_api, get_workspace_id
+from app.tools._guards import confirm_gate
 
 
 @tool
@@ -95,6 +96,9 @@ async def delete_page(page_id: str) -> dict:
     Args:
         page_id: MongoDB ObjectId of the page to delete.
     """
+    block = confirm_gate(f"delete page `{page_id}` and all its files")
+    if block:
+        return block
     return await flux_api.delete(f"/api/pages/{page_id}")
 
 

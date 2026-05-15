@@ -1,4 +1,8 @@
-"""Task Agent — suggests tasks based on project progress."""
+"""Task Planner Agent — suggests tasks based on project progress.
+
+NOTE: This is the *planning* agent (registered in the main agent registry).
+      For task *execution* (CRUD via RPM-BE), see sub_agents/task_agent.py.
+"""
 
 from langchain_core.messages import AIMessage
 from langchain_core.prompts import ChatPromptTemplate

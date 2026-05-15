@@ -7,6 +7,7 @@ import re
 from langchain_core.tools import tool
 
 from app.tools._client import flux_api, get_workspace_id, get_project_id
+from app.tools._guards import confirm_gate
 
 # MongoDB ObjectId: 24-char hex string
 _OID_RE = re.compile(r'^[0-9a-fA-F]{24}$')
@@ -21,8 +22,7 @@ def _is_valid_oid(value: str) -> bool:
     """Return True only if value looks like a real MongoDB ObjectId."""
     return bool(value and _OID_RE.match(value) and value.lower() not in _PLACEHOLDER_VALUES)
 
-
-def _slim_task(task: dict) -> dict:
+def _slim_task(task: dict, column_name: str = "") -> dict:
     """Strip heavy/unused fields from a task object to reduce LLM token usage.
 
     Only keeps the fields the agent actually needs to reason about tasks.
@@ -35,6 +35,8 @@ def _slim_task(task: dict) -> dict:
         "identifier": task.get("identifier", ""),
         "title": task.get("title", ""),
         "columnId": task.get("columnId", ""),
+        # Human-readable column name — critical so LLM doesn't miss tasks
+        "columnName": column_name or task.get("columnId", ""),
         "priority": task.get("priority", "none"),
         "completed": task.get("completed", False),
         "isOverdue": task.get("isOverdue", False),
@@ -48,16 +50,15 @@ def _slim_task(task: dict) -> dict:
     }
 
 
-
 @tool
 async def list_tasks(project_id: str) -> dict:
-    """List all tasks in a project, grouped by columns (backlog, todo, in_progress, done).
+    """List ALL tasks in a project, grouped by columns (backlog, todo, doing, review, done).
 
-    Use this to get an overview of the project's task board, check what tasks exist,
-    or gather data before creating/updating tasks.
+    Use this to get a complete overview of the project's task board.
+    Returns EVERY task regardless of who created or is assigned to them.
 
     IMPORTANT: project_id must be a real 24-char hex MongoDB ObjectId.
-    If you don’t have it, call list_projects first.
+    If you don't have it, call list_projects first.
 
     Args:
         project_id: MongoDB ObjectId of the project.
@@ -75,16 +76,44 @@ async def list_tasks(project_id: str) -> dict:
             ),
         }
     result = await flux_api.get(f"/api/project/{project_id}/tasks")
-    # Slim down task objects — gập bớt các field nặng không cần thiết cho LLM
-    if isinstance(result, dict) and not result.get("error"):
-        tasks = result.get("tasks", [])
-        result = {
-            "tasks": [_slim_task(t) for t in tasks],
-            "columns": result.get("columns", []),
-            "projectName": result.get("projectName", ""),
-            "total": len(tasks),
-        }
-    return result
+
+    if isinstance(result, dict) and result.get("error"):
+        return result
+
+    tasks_raw = result.get("tasks", []) if isinstance(result, dict) else []
+    columns_raw = result.get("columns", []) if isinstance(result, dict) else []
+
+    # Build column_id → human-readable name map so LLM understands the board
+    col_name_map: dict[str, str] = {}
+    for col in columns_raw:
+        cid = str(col.get("id", col.get("_id", "")))
+        ctitle = col.get("title", cid)
+        if cid:
+            col_name_map[cid] = ctitle
+
+    # Slim tasks — enrich with column name
+    slimmed = [_slim_task(t, col_name_map.get(str(t.get("columnId", "")), "")) for t in tasks_raw]
+
+    # Group by column preserving board order
+    grouped: dict[str, list] = {}
+    col_order = [str(c.get("id", c.get("_id", ""))) for c in columns_raw]
+
+    for cid in col_order:
+        grouped[col_name_map.get(cid, cid)] = []
+
+    for t in slimmed:
+        cid = str(t.get("columnId", ""))
+        cname = col_name_map.get(cid, cid or "Uncategorised")
+        if cname not in grouped:
+            grouped[cname] = []
+        grouped[cname].append(t)
+
+    return {
+        "projectName": result.get("projectName", ""),
+        "total": len(slimmed),
+        "columns": grouped,          # {column_name: [task, ...]} — LLM-friendly
+        "tasks": slimmed,            # flat list for tools that need it
+    }
 
 
 @tool
@@ -329,4 +358,7 @@ async def delete_task(task_id: str) -> dict:
     Args:
         task_id: MongoDB ObjectId of the task to delete.
     """
+    block = confirm_gate(f"delete task `{task_id}`")
+    if block:
+        return block
     return await flux_api.delete(f"/api/tasks/{task_id}")

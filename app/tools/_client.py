@@ -27,6 +27,9 @@ logger = logging.getLogger(__name__)
 _current_user_id: ContextVar[str] = ContextVar("current_user_id", default="")
 _current_workspace_id: ContextVar[str] = ContextVar("current_workspace_id", default="")
 _current_project_id: ContextVar[str] = ContextVar("current_project_id", default="")
+_current_trace_id: ContextVar[str] = ContextVar("current_trace_id", default="-")
+# Raw user message text — read by _guards.py for confirmation detection
+_user_message: ContextVar[str] = ContextVar("_user_message", default="")
 
 
 def set_user_context(
@@ -38,6 +41,21 @@ def set_user_context(
     _current_user_id.set(user_id)
     _current_workspace_id.set(workspace_id)
     _current_project_id.set(project_id)
+
+
+def set_trace_id(trace_id: str) -> None:
+    """Set the distributed trace ID for the current async task."""
+    _current_trace_id.set(trace_id)
+
+
+def set_user_message(text: str) -> None:
+    """Set the raw user message text for the current async task.
+    Used by the server-side confirmation guard in _guards.py."""
+    _user_message.set(text)
+
+
+def get_trace_id() -> str:
+    return _current_trace_id.get()
 
 
 def get_user_id() -> str:
@@ -114,14 +132,16 @@ class FluxAPIClient:
             )
             return {"error": True, "status": 401, "message": "No user context set"}
 
+        trace_id = _current_trace_id.get()
         headers = {
             "X-Internal-Key": self.internal_key,
             "X-User-Id": user_id,
+            "X-Trace-Id": trace_id,
             "Content-Type": "application/json",
         }
 
         url = f"{self.base_url}{path}"
-        logger.debug("API %s %s (user=%s)", method, path, user_id[:8])
+        logger.debug("[%s] API %s %s (user=%s)", trace_id, method, path, user_id[:8])
 
         client = self._get_client()
         last_error: Exception | None = None

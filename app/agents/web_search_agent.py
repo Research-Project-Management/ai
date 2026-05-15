@@ -4,11 +4,8 @@ from __future__ import annotations
 
 import logging
 
-from langchain_core.messages import AIMessage
-
 from app.agents.base import AgentState, BaseAgent
 from app.agents.registry import register_agent
-from app.config import get_llm
 
 logger = logging.getLogger(__name__)
 
@@ -63,29 +60,7 @@ def _build_site_queries(user_query: str, sites: list[str]) -> list[str]:
     return queries
 
 
-def _translate_to_english(text: str) -> str:
-    """Translate a query to English via LLM so OpenAlex (English-indexed) returns better results."""
-    try:
-        llm = get_llm(temperature=0)
-        response = llm.invoke(
-            [
-                {
-                    "role": "system",
-                    "content": (
-                        "Translate the following academic search query to English. "
-                        "Return ONLY the translated query, nothing else. "
-                        "If it is already in English, return it unchanged."
-                    ),
-                },
-                {"role": "user", "content": text},
-            ]
-        )
-        translated = response.content.strip()
-        logger.info("Translated OpenAlex query: %r → %r", text, translated)
-        return translated
-    except Exception as exc:
-        logger.warning("Query translation failed, using original: %s", exc)
-        return text
+from app.agents.utils import _translate_to_english
 
 
 def _search_ddg(query: str, max_results: int = _MAX_RESULTS) -> list[dict]:
@@ -311,38 +286,45 @@ class WebSearchAgent(BaseAgent):
         return results, search_query
 
     async def run(self, state: AgentState) -> AgentState:
-        metadata = state.get("metadata", {})
-        sites: list[str] = metadata.get("web_search_sites") or DEFAULT_ACADEMIC_SITES
+        """Run web search and synthesise results into agent_output.
+
+        This bridges the BaseAgent interface so WebSearchAgent can be registered
+        in the registry and discovered by the Supervisor.  The streaming pipeline
+        (graph.py web_research_node) calls fetch_results / fetch_results_with_query
+        directly for real-time token streaming; this method handles the non-streaming
+        (sync) path used by /chat/sync and any future direct invocations.
+        """
+        from app.config import get_llm
+        from langchain_core.messages import HumanMessage, SystemMessage
 
         results, query = self.fetch_results(state)
-
         formatted = _format_results(results)
 
-        # Synthesize with LLM
         llm = get_llm()
         synthesis_messages = [
-            {"role": "system", "content": SYNTHESIS_SYSTEM_PROMPT},
-            {
-                "role": "user",
-                "content": (
-                    f"Question: {query}\n\n"
-                    f"Search results:\n{formatted}"
-                ),
-            },
+            SystemMessage(content=SYNTHESIS_SYSTEM_PROMPT),
+            HumanMessage(content=f"Question: {query}\n\nSearch Results:\n{formatted}"),
         ]
-        response = await llm.ainvoke(synthesis_messages)
-        content = response.content if isinstance(response.content, str) else str(response.content)
+        try:
+            response = await llm.ainvoke(synthesis_messages)
+            content = response.content if hasattr(response, "content") else str(response)
+        except Exception as exc:
+            logger.error("[WebSearchAgent] LLM synthesis failed: %s", exc)
+            content = f"Web search found {len(results)} results but synthesis failed: {exc}\n\n{formatted}"
 
         sources = [
-            {"title": r.get("title", ""), "url": r.get("href", ""), "snippet": r.get("body", "")[:200]}
+            {"source": r.get("title", r.get("href", "")), "url": r.get("href", ""), "snippet": r.get("body", "")[:200]}
             for r in results
         ]
 
-        state["agent_output"] = {
-            "agent_name": self.name,
-            "content": content,
-            "sources": sources,
-            "metadata": {"query": query, "sites": sites},
+        return {
+            **state,
+            "agent_output": {
+                "agent_name": self.name,
+                "content": content,
+                "sources": sources,
+                "metadata": {"query": query, "result_count": len(results)},
+            },
+            "intent": "web_search",
         }
-        state["messages"] = [AIMessage(content=content)]
-        return state
+

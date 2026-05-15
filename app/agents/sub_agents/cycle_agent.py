@@ -8,16 +8,9 @@ Invoked by Orchestrator when the user wants to:
 
 from __future__ import annotations
 
-import logging
-from typing import AsyncIterator
-
-from langchain_core.messages import HumanMessage
-from langgraph.prebuilt import create_react_agent
-
-from app.agents.card import AgentCard, AgentTask, AgentResult, register_card
-from app.config import get_agent_llm
-from app.tools._client import set_user_context
-from app.tools.cycle_tools import (
+from app.agents.card import AgentCard, AgentTask, AgentResult, register_card  # noqa: F401
+from app.agents.sub_agents.base_sub_agent import BaseSubAgent
+from app.tools.cycle.cycle_tools import (
     list_cycles,
     get_cycle_details,
     create_cycle,
@@ -25,7 +18,7 @@ from app.tools.cycle_tools import (
     delete_cycle,
 )
 
-logger = logging.getLogger(__name__)
+# ── Agent Card ─────────────────────────────────────────────────────────────
 
 CYCLE_AGENT_CARD = register_card(AgentCard(
     name="cycle_agent",
@@ -37,9 +30,9 @@ CYCLE_AGENT_CARD = register_card(AgentCard(
     has_destructive_ops=True,
 ))
 
-CYCLE_TOOLS = [list_cycles, get_cycle_details, create_cycle, update_cycle, delete_cycle]
+# ── System Prompt ──────────────────────────────────────────────────────────
 
-CYCLE_SYSTEM_PROMPT = """\
+_SYSTEM_PROMPT = """\
 You are the **Cycle Agent** — a specialized AI for managing research cycles (sprints) \
 in the user's workspace.
 
@@ -56,50 +49,17 @@ in the user's workspace.
 """
 
 
-class CycleSubAgent:
+# ── Sub-Agent ──────────────────────────────────────────────────────────────
+
+class CycleSubAgent(BaseSubAgent):
+    """Research cycle management sub-agent."""
+
     card = CYCLE_AGENT_CARD
+    tools = [list_cycles, get_cycle_details, create_cycle, update_cycle, delete_cycle]
 
     def _build_prompt(self, task: AgentTask) -> str:
-        return CYCLE_SYSTEM_PROMPT.format(
+        return _SYSTEM_PROMPT.format(
             workspace_id=task.workspace_id or "N/A",
             project_id=task.project_id or "none",
             user_id=task.user_id or "unknown",
         )
-
-    def _build_agent(self, prompt: str):
-        return create_react_agent(model=get_agent_llm(), tools=CYCLE_TOOLS, prompt=prompt)
-
-    async def invoke(self, task: AgentTask) -> AgentResult:
-        set_user_context(task.user_id, task.workspace_id, task.project_id)
-        agent = self._build_agent(self._build_prompt(task))
-        messages = task.messages + [HumanMessage(content=task.request)]
-        try:
-            result = await agent.ainvoke({"messages": messages})
-            return AgentResult(content=str(result["messages"][-1].content), agent_name=self.card.name)
-        except Exception as exc:
-            logger.error("[CycleSubAgent] Error: %s", exc)
-            return AgentResult(content=f"Cycle agent error: {exc}", agent_name=self.card.name, has_error=True)
-
-    async def stream(self, task: AgentTask) -> AsyncIterator[dict]:
-        set_user_context(task.user_id, task.workspace_id, task.project_id)
-        agent = self._build_agent(self._build_prompt(task))
-        messages = task.messages + [HumanMessage(content=task.request)]
-
-        async for event in agent.astream_events({"messages": messages}, version="v2"):
-            kind = event.get("event", "")
-            if kind == "on_tool_start":
-                yield {"type": "tool_start", "agent": self.card.name,
-                       "tool": event.get("name", ""), "input": event.get("data", {}).get("input", {})}
-            elif kind == "on_tool_end":
-                out = event.get("data", {}).get("output", "")
-                if hasattr(out, "content"):
-                    out = out.content
-                yield {"type": "tool_end", "agent": self.card.name, "tool": event.get("name", ""), "output": out}
-            elif kind == "on_chat_model_stream":
-                chunk = event.get("data", {}).get("chunk")
-                if chunk and hasattr(chunk, "content") and chunk.content:
-                    token = chunk.content if isinstance(chunk.content, str) else str(chunk.content)
-                    if token:
-                        yield {"type": "token", "content": token}
-
-        yield {"type": "done", "agent": self.card.name}

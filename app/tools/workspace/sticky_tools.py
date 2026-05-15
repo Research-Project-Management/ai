@@ -5,6 +5,7 @@ from __future__ import annotations
 from langchain_core.tools import tool
 
 from app.tools._client import flux_api, get_workspace_id
+from app.tools._guards import confirm_gate
 
 
 @tool
@@ -86,4 +87,7 @@ async def delete_sticky(sticky_id: str) -> dict:
     Args:
         sticky_id: MongoDB ObjectId of the sticky note to delete.
     """
+    block = confirm_gate(f"delete sticky note `{sticky_id}`")
+    if block:
+        return block
     return await flux_api.delete(f"/api/stickies/{sticky_id}")

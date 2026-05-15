@@ -25,6 +25,13 @@ def register_agent(cls: type[BaseAgent]) -> type[BaseAgent]:
     """
     instance = cls()
     _REGISTRY[instance.name] = instance
+    # Invalidate supervisor's agent catalog cache so new agents are immediately
+    # visible in the Supervisor prompt without a server restart.
+    try:
+        from app.agents.graph import invalidate_agent_catalog_cache
+        invalidate_agent_catalog_cache()
+    except Exception:
+        pass  # graph may not be imported yet during initial startup — that's fine
     return cls
 
 

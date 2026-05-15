@@ -6,7 +6,7 @@ on behalf of the user. Tools are auto-imported and aggregated into
 ALL_TOOLS for the ReAct agent.
 """
 
-from app.tools.task_tools import (
+from app.tools.task.task_tools import (
     list_tasks,
     get_my_tasks,
     summarize_member_tasks,
@@ -14,7 +14,7 @@ from app.tools.task_tools import (
     update_task,
     delete_task,
 )
-from app.tools.project_tools import (
+from app.tools.project.project_tools import (
     list_projects,
     get_project_overview,
     get_project_details,
@@ -23,20 +23,20 @@ from app.tools.project_tools import (
     remove_project_member,
     update_member_role,
 )
-from app.tools.workspace_tools import (
+from app.tools.workspace.workspace_tools import (
     search_workspace,
     list_members,
     get_workspace_overview,
     get_workspace_activity,
 )
-from app.tools.cycle_tools import (
+from app.tools.cycle.cycle_tools import (
     list_cycles,
     get_cycle_details,
     create_cycle,
     update_cycle,
     delete_cycle,
 )
-from app.tools.page_tools import (
+from app.tools.project.page_tools import (
     list_pages,
     get_page_content,
     create_page,
@@ -45,28 +45,28 @@ from app.tools.page_tools import (
     get_page_versions,
     list_workspace_pages,
 )
-from app.tools.tag_tools import (
+from app.tools.workspace.tag_tools import (
     list_tags,
     create_tag,
     delete_tag,
 )
-from app.tools.sticky_tools import (
+from app.tools.workspace.sticky_tools import (
     list_stickies,
     create_sticky,
     update_sticky,
     delete_sticky,
 )
-from app.tools.comment_tools import (
+from app.tools.project.comment_tools import (
     get_task_comments,
     add_task_comment,
     get_page_comments,
     add_page_comment,
 )
-from app.tools.user_tools import (
+from app.tools.workspace.user_tools import (
     get_current_user,
     search_users,
 )
-from app.tools.analysis_tools import (
+from app.tools.workspace.analysis_tools import (
     get_workload_distribution,
     get_overdue_report,
     get_project_velocity,

@@ -5,6 +5,7 @@ from __future__ import annotations
 from langchain_core.tools import tool
 
 from app.tools._client import flux_api, get_workspace_id
+from app.tools._guards import confirm_gate
 
 
 @tool
@@ -53,4 +54,7 @@ async def delete_tag(tag_id: str) -> dict:
     Args:
         tag_id: MongoDB ObjectId of the tag to delete.
     """
+    block = confirm_gate(f"delete tag `{tag_id}`")
+    if block:
+        return block
     return await flux_api.delete(f"/api/tags/{tag_id}")

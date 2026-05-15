@@ -5,6 +5,7 @@ from __future__ import annotations
 from langchain_core.tools import tool
 
 from app.tools._client import flux_api
+from app.tools._guards import confirm_gate
 
 
 @tool
@@ -126,4 +127,7 @@ async def delete_cycle(cycle_id: str) -> dict:
     Args:
         cycle_id: MongoDB ObjectId of the cycle to delete.
     """
+    block = confirm_gate(f"delete cycle `{cycle_id}`")
+    if block:
+        return block
     return await flux_api.delete(f"/api/cycles/{cycle_id}")

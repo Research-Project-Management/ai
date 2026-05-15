@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import logging
+import uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter
@@ -30,37 +31,14 @@ from app.agents.orchestrator import stream_orchestrator
 from app.agents.registry import get_agent
 from app.config import get_agent_llm, get_llm
 from app.models import AgentOutput, ChatRequest, ChatResponse
+from app.tools._client import set_trace_id, get_trace_id, set_user_message
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["chat"])
 
 
-# ── Token extractor ──────────────────────────────────────────────
-
-def _extract_token(content) -> str:
-    """Safely extract text from a LangChain chunk's content.
-
-    Handles:
-    - ``str`` — returned as-is
-    - ``list`` of content blocks (Anthropic / Groq structured format):
-      e.g. [{'type': 'text', 'text': 'Hello'}, {'type': 'text', 'text': ' world'}]
-    - Anything else — str() conversion (should not normally happen)
-    """
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        parts: list[str] = []
-        for block in content:
-            if isinstance(block, dict):
-                if block.get("type") == "text":
-                    parts.append(block.get("text", ""))
-                # ignore non-text block types (e.g. tool_use, thinking)
-            elif isinstance(block, str):
-                parts.append(block)
-        return "".join(parts)
-    # fallback — avoid Python repr of complex objects
-    return ""
+from app.agents.utils import _extract_token
 
 
 # ── System Prompt Builder ────────────────────────────────────────────────────
@@ -171,114 +149,24 @@ def _build_system_prompt(
     )
 
 
-# ── Action Agent Streaming ───────────────────────────────────────────────────
-
-async def _stream_action_agent(messages: list, request: ChatRequest):
-    """Run the ReAct action agent and yield SSE events for tool calls + tokens.
-
-    This uses LangGraph's create_react_agent with astream_events to capture
-    both tool invocations and LLM response tokens in real-time.
-    """
-    from langgraph.prebuilt import create_react_agent
-
-    from app.agents.action_agent import CONFIRM_REQUIRED_TOOLS, build_action_prompt
-    from app.tools import ALL_TOOLS
-    from app.tools._client import set_user_context
-
-    # Set user context for tool calls
-    user_id = request.user_id or ""
-    workspace_id = request.workspace_id or ""
-    project_id = request.project_id or ""
-    set_user_context(user_id, workspace_id, project_id)
-
-    # Build the action agent
-    system_prompt = build_action_prompt(
-        workspace_id=workspace_id,
-        project_id=project_id,
-        user_id=user_id,
-    )
-
-    agent_llm = get_agent_llm()
-    agent = create_react_agent(
-        model=agent_llm,
-        tools=ALL_TOOLS,
-        prompt=system_prompt,
-    )
-
-    # Track tool calls for summary
-    tool_calls_log: list[dict] = []
-
-    # Stream agent events
-    async for event in agent.astream_events(
-        {"messages": messages},
-        version="v2",
-    ):
-        kind = event.get("event", "")
-
-        # ── Tool call start ──────────────────────────────────────
-        if kind == "on_tool_start":
-            tool_name = event.get("name", "unknown")
-            tool_input = event.get("data", {}).get("input", {})
-
-            # Check if this tool requires confirmation
-            needs_confirm = tool_name in CONFIRM_REQUIRED_TOOLS
-
-            action_event = {
-                "type": "tool_start",
-                "tool": tool_name,
-                "input": tool_input,
-                "needs_confirm": needs_confirm,
-            }
-            yield f"data: [ACTION]{json.dumps(action_event)}\n\n"
-            logger.info("Tool start: %s(%s)", tool_name, json.dumps(tool_input)[:200])
-
-        # ── Tool call end ────────────────────────────────────────
-        elif kind == "on_tool_end":
-            tool_name = event.get("name", "unknown")
-            tool_output = event.get("data", {}).get("output", "")
-
-            # Parse output — could be string or ToolMessage
-            if hasattr(tool_output, "content"):
-                output_data = tool_output.content
-            else:
-                output_data = str(tool_output)
-
-            # Try to parse as JSON for structured display
-            try:
-                if isinstance(output_data, str):
-                    parsed_output = json.loads(output_data)
-                else:
-                    parsed_output = output_data
-            except (json.JSONDecodeError, TypeError):
-                parsed_output = {"raw": output_data[:500] if isinstance(output_data, str) else str(output_data)[:500]}
-
-            action_event = {
-                "type": "tool_end",
-                "tool": tool_name,
-                "output": parsed_output,
-            }
-            yield f"data: [ACTION]{json.dumps(action_event, default=str)}\n\n"
-
-            tool_calls_log.append({
-                "tool": tool_name,
-                "success": not (isinstance(parsed_output, dict) and parsed_output.get("error")),
-            })
-            logger.info("Tool end: %s → success=%s", tool_name, tool_calls_log[-1]["success"])
-
-        # ── LLM answer tokens (final response) ──────────────────
-        elif kind == "on_chat_model_stream":
-            chunk = event.get("data", {}).get("chunk")
-            if chunk and hasattr(chunk, "content") and chunk.content:
-                token = _extract_token(chunk.content)
-                if token:
-                    yield f"data: {token.replace(chr(10), chr(92) + 'n')}\n\n"
-
-
 # ── Streaming Endpoint ───────────────────────────────────────────────────────
 
 @router.post("/chat")
 async def chat(request: ChatRequest):
     """Unified chat endpoint with Supervisor Pipeline + real token streaming."""
+
+    # Generate short trace ID for this request (8 hex chars)
+    trace_id = uuid.uuid4().hex[:8]
+    set_trace_id(trace_id)
+    logger.info("[%s] CHAT user=%s intent=%s", trace_id, request.user_id, request.intent_hint)
+
+    # Extract the last user message for server-side confirmation guards
+    last_user_msg = ""
+    for msg in reversed(request.messages):
+        if msg.role == "user":
+            last_user_msg = msg.content
+            break
+    set_user_message(last_user_msg)
 
     # Build LangChain message history
     messages: list = []
@@ -359,7 +247,11 @@ async def chat(request: ChatRequest):
 
                     # ── ACTION AGENT ROUTE (A2A Orchestrator) ───────────────
                     if route == "action":
-                        yield f"data: [META]{json.dumps({'agent': 'orchestrator', 'intent': 'action'})}\n\n"
+                        yield f"data: [META]{json.dumps({'agent': 'orchestrator', 'intent': 'action', 'trace_id': get_trace_id()})}\n\n"
+
+                        # Emit early "thinking" so user sees activity immediately —
+                        # before orchestrator LLM decides which sub-agent to call.
+                        yield f"data: [ACTION]{json.dumps({'type': 'thinking', 'agent': 'orchestrator'})}\n\n"
 
                         # Stream qua A2A Orchestrator (delegate sang sub-agents)
                         async for event_data in stream_orchestrator(messages, request):
@@ -457,7 +349,6 @@ async def chat(request: ChatRequest):
                 agent_name = intent
 
             # For RAG+Web combined context
-            combined_web = web_context
             if intent == "rag" and web_context:
                 # RAG was insufficient, web supplemented → use both contexts
                 intent = "rag"
@@ -499,8 +390,14 @@ async def chat(request: ChatRequest):
 
 @router.post("/chat/sync", response_model=ChatResponse)
 async def chat_sync(request: ChatRequest):
-    """Non-streaming version — returns full response at once via LangGraph."""
-    from app.agents.router import get_graph
+    """Non-streaming version — returns full response at once via the Supervisor Pipeline.
+
+    Uses the same pipeline as the streaming endpoint so RAG / web-search routing
+    is available here too.  The legacy router.get_graph() had no RAG node.
+    """
+    # Generate trace ID for observability
+    trace_id = uuid.uuid4().hex[:8]
+    set_trace_id(trace_id)
 
     messages: list = []
     for msg in request.messages:
@@ -509,21 +406,44 @@ async def chat_sync(request: ChatRequest):
         else:
             messages.append(AIMessage(content=msg.content))
 
+    # Extract last user message for guard context
+    last_user_msg = ""
+    for msg in reversed(request.messages):
+        if msg.role == "user":
+            last_user_msg = msg.content
+            break
+    set_user_message(last_user_msg)
+
+    # Build full PipelineState — same as the streaming endpoint
+    # so RAG retrieval and web search work correctly here too.
     state = {
         "messages": messages,
+        "document_ids": request.document_ids or [],
+        "web_search_enabled": bool(request.web_search_sites),
+        "web_search_sites": request.web_search_sites or [],
         "metadata": {
             "project_id": request.project_id,
             "document_ids": request.document_ids,
             "intent_hint": request.intent_hint,
+            "web_search_sites": request.web_search_sites,
+            "workspace_id": request.workspace_id,
+            "user_id": request.user_id,
+            "chat_id": request.chat_id,
         },
-        "context": [],
+        "user_id": request.user_id or "",
+        "chat_id": request.chat_id or "",
     }
 
-    graph = get_graph()
-    result = await graph.ainvoke(state)
+    pipeline = get_pipeline()
+    result = await pipeline.ainvoke(state)
 
     agent_output = result.get("agent_output", {})
     return ChatResponse(
-        output=AgentOutput(**agent_output),
+        output=AgentOutput(**agent_output) if agent_output else AgentOutput(
+            agent_name=result.get("intent", "chat"),
+            content=result.get("early_reply", ""),
+            sources=[],
+        ),
         intent=result.get("intent"),
     )
+

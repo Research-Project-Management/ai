@@ -21,30 +21,9 @@ from datetime import datetime, timezone
 
 from app.agents.base import BaseAgent
 from app.agents.registry import register_agent
+from app.tools._guards import CONFIRM_REQUIRED_TOOLS  # noqa: F401 — re-exported for callers
 
 logger = logging.getLogger(__name__)
-
-
-# Sensitive tools that require user confirmation before execution
-CONFIRM_REQUIRED_TOOLS = {
-    # Tasks
-    "delete_task",
-    "update_task",
-    # Pages
-    "delete_page",
-    "update_page",
-    # Cycles
-    "delete_cycle",
-    "update_cycle",
-    # Stickies
-    "delete_sticky",
-    # Tags
-    "delete_tag",
-    # Project management
-    "remove_project_member",
-    "update_project",
-    "update_member_role",
-}
 
 
 ACTION_SYSTEM_PROMPT = """\
