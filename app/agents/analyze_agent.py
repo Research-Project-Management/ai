@@ -18,7 +18,11 @@ ANALYZE_PROMPT = ChatPromptTemplate.from_messages(
             "- **Key Findings** (bullet points)\n"
             "- **Methodology Assessment** (if applicable)\n"
             "- **Strengths & Weaknesses**\n"
+            "- **Implications** for the user's research or project\n"
+            "- **Limitations / Caveats** when evidence is incomplete\n"
             "- **Summary Table** (use markdown table if comparing items)\n\n"
+            "Be clear, warm, and sufficiently detailed. Avoid one-line answers "
+            "for substantive analysis requests. Match the user's language.\n\n"
             "## Content to Analyze\n{content}",
         ),
         ("human", "{question}"),

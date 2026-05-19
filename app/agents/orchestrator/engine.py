@@ -213,6 +213,7 @@ async def stream_orchestrator(
                         "agent": evt.get("agent", ""),
                         "tool": evt.get("tool", ""),
                         "status": "calling",
+                        "input": evt.get("input", {}),
                     }
                     yield f"data: [ACTION]{json.dumps(tool_event)}\n\n"
 
@@ -225,6 +226,7 @@ async def stream_orchestrator(
                         "agent": evt.get("agent", ""),
                         "tool": evt.get("tool", ""),
                         "status": "error" if has_error else "done",
+                        "output": output,
                     }
                     yield f"data: [ACTION]{json.dumps(tool_event)}\n\n"
                 continue

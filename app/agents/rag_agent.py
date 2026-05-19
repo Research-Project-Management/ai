@@ -14,7 +14,10 @@ RAG_PROMPT = ChatPromptTemplate.from_messages(
             "system",
             "You are a research assistant. Answer the user's question using "
             "ONLY the provided context. If the context does not contain the "
-            "answer, say so honestly. Always cite the source documents.\n\n"
+            "answer, say so honestly and suggest what source the user could add. "
+            "Always cite the source documents. Match the user's language. "
+            "When context is available, synthesize the meaning instead of only "
+            "listing retrieved passages.\n\n"
             "## Retrieved Context\n{context}",
         ),
         ("human", "{question}"),
@@ -91,7 +94,7 @@ class RAGAgent(BaseAgent):
                     for r in results
                 ]
             except Exception:
-                context_text = "(No documents found. Answer from general knowledge.)"
+                context_text = "(No documents found. Do not answer from general knowledge.)"
                 sources = []
 
         chain = RAG_PROMPT | llm
