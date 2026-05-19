@@ -91,6 +91,10 @@ class ChatRequest(BaseModel):
         None,
         description="Slash command hint, e.g. 'fix', 'refactor', 'complete'.",
     )
+    memory_context: dict[str, Any] | None = Field(
+        None,
+        description="Persistent chat/workspace/project memory injected by RPM-BE.",
+    )
 
 
 class DocumentUploadMeta(BaseModel):

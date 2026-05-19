@@ -15,6 +15,7 @@ from langchain_core.messages import BaseMessage, SystemMessage
 from langgraph.prebuilt import create_react_agent
 
 from app.agents.card import build_orchestrator_catalog
+from app.agents.conversation_context import build_conversation_memory
 from app.agents.orchestrator.context import _request_ctx, _sub_agent_event_queue
 from app.agents.orchestrator.tools import ORCHESTRATOR_TOOLS
 from app.config import get_agent_llm
@@ -60,6 +61,7 @@ specialized sub-agent. You do NOT handle requests directly; you coordinate.
 - User ID: {user_id}
 
 {project_note}
+{conversation_context}
 
 ## Delegation Rules
 1. **Tasks** → `delegate_to_task_agent` (list, create, update, delete tasks; workload)
@@ -91,7 +93,12 @@ For dependent workflows, call agents sequentially:
 """
 
 
-def _build_orchestrator_prompt(workspace_id: str, project_id: str, user_id: str) -> str:
+def _build_orchestrator_prompt(
+    workspace_id: str,
+    project_id: str,
+    user_id: str,
+    conversation_context: str = "",
+) -> str:
     project_note = (
         f"⚡ **Active Project**: `{project_id}` — pass this as context when delegating to Task/Project agents.\n"
         if project_id
@@ -104,6 +111,13 @@ def _build_orchestrator_prompt(workspace_id: str, project_id: str, user_id: str)
         project_id=project_id or "none",
         user_id=user_id or "unknown",
         project_note=project_note,
+        conversation_context=(
+            "## Conversation Memory\n"
+            + conversation_context.strip()
+            + "\n\nUse this to resolve follow-up requests before delegating.\n"
+            if conversation_context.strip()
+            else ""
+        ),
     )
 
 
@@ -129,6 +143,7 @@ _SENTINEL = object()
 async def stream_orchestrator(
     messages: list[BaseMessage],
     request: ChatRequest,
+    conversation_memory: str = "",
 ) -> AsyncIterator[str]:
     """Stream SSE events from the Orchestrator and its sub-agents."""
     user_id = request.user_id or ""
@@ -136,7 +151,13 @@ async def stream_orchestrator(
     project_id = request.project_id or ""
     chat_id = request.chat_id or ""
 
-    system_prompt = _build_orchestrator_prompt(workspace_id, project_id, user_id)
+    conversation_context = conversation_memory or build_conversation_memory(messages)
+    system_prompt = _build_orchestrator_prompt(
+        workspace_id,
+        project_id,
+        user_id,
+        conversation_context,
+    )
 
     _request_ctx.set({
         "user_id": user_id,

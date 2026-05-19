@@ -57,6 +57,12 @@ existing document.
 ## Active Context (where the user is working)
 {selection_context}
 
+## Conversation Context
+Use this to understand follow-up requests such as "continue", "make it shorter",
+"apply that", "fix the previous answer", or references to prior edits. The current
+document above remains the source of truth.
+{conversation_context}
+
 ## CRITICAL RULES — Read carefully
 
 ### Editing Rules
@@ -292,6 +298,7 @@ class LaTeXEditorAgent(BaseAgent):
                 "selection_info": selection_info,
                 "cursor_line": cursor_line,
                 "cursor_column": cursor_column,
+                "conversation_context": metadata.get("conversation_memory") or "(No prior conversation.)",
                 "request": request,
             }
         )

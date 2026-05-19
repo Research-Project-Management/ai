@@ -27,6 +27,10 @@ from fastapi.responses import StreamingResponse
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from app.agents.graph import PipelineState, get_pipeline
+from app.agents.conversation_context import (
+    compact_messages_for_llm,
+    memory_system_message,
+)
 from app.agents.orchestrator import stream_orchestrator
 from app.agents.registry import get_agent
 from app.config import get_agent_llm, get_llm
@@ -39,6 +43,50 @@ router = APIRouter(tags=["chat"])
 
 
 from app.agents.utils import _extract_token
+
+
+def _format_persistent_memory(memory_context: dict | None) -> str:
+    """Format persisted chat/workspace/project memory for prompt injection."""
+    if not memory_context:
+        return ""
+
+    sections: list[str] = []
+    chat_summary = str(memory_context.get("chatSummary") or "").strip()
+    if chat_summary:
+        sections.append("Chat summary:\n" + chat_summary)
+
+    key_facts = [
+        str(item).strip()
+        for item in memory_context.get("keyFacts") or []
+        if str(item).strip()
+    ][:12]
+    if key_facts:
+        sections.append("Key facts:\n" + "\n".join(f"- {item}" for item in key_facts))
+
+    open_questions = [
+        str(item).strip()
+        for item in memory_context.get("openQuestions") or []
+        if str(item).strip()
+    ][:8]
+    if open_questions:
+        sections.append(
+            "Open questions:\n" + "\n".join(f"- {item}" for item in open_questions)
+        )
+
+    memory_lines: list[str] = []
+    for memory in (memory_context.get("memories") or [])[:12]:
+        if not isinstance(memory, dict):
+            continue
+        content = str(memory.get("content") or "").strip()
+        if not content:
+            continue
+        label = str(memory.get("type") or "memory").replace("_", " ")
+        scope = str(memory.get("scope") or "workspace")
+        memory_lines.append(f"- [{scope} / {label}] {content}")
+    if memory_lines:
+        sections.append("Workspace/project memory:\n" + "\n".join(memory_lines))
+
+    return "\n\n".join(sections).strip()
 
 
 # ── System Prompt Builder ────────────────────────────────────────────────────
@@ -176,6 +224,16 @@ async def chat(request: ChatRequest):
         else:
             messages.append(AIMessage(content=msg.content))
 
+    compact_messages, conversation_memory = compact_messages_for_llm(messages)
+    persistent_memory = _format_persistent_memory(request.memory_context)
+    if persistent_memory:
+        conversation_memory = (
+            "Persistent memory:\n"
+            + persistent_memory
+            + ("\n\nConversation memory:\n" + conversation_memory if conversation_memory else "")
+        )
+    memory_message = memory_system_message(conversation_memory)
+
     metadata = {
         "project_id": request.project_id,
         "document_ids": request.document_ids,
@@ -198,11 +256,13 @@ async def chat(request: ChatRequest):
         "selection_end_column": request.selection_end_column,
         "document_structure": request.document_structure or "",
         "command_hint": request.command_hint or "",
+        "conversation_memory": conversation_memory,
+        "persistent_memory": persistent_memory,
     }
 
     # Build initial pipeline state
     initial_state: PipelineState = {
-        "messages": messages,
+        "messages": compact_messages,
         "document_ids": request.document_ids or [],
         "web_search_enabled": bool(request.web_search_sites),
         "web_search_sites": request.web_search_sites or [],
@@ -254,7 +314,11 @@ async def chat(request: ChatRequest):
                         yield f"data: [ACTION]{json.dumps({'type': 'thinking', 'agent': 'orchestrator'})}\n\n"
 
                         # Stream qua A2A Orchestrator (delegate sang sub-agents)
-                        async for event_data in stream_orchestrator(messages, request):
+                        async for event_data in stream_orchestrator(
+                            compact_messages,
+                            request,
+                            conversation_memory,
+                        ):
                             yield event_data
 
                         # Final META
@@ -317,6 +381,7 @@ async def chat(request: ChatRequest):
                             "selection_info": selection_info,
                             "cursor_line": cursor_line,
                             "cursor_column": cursor_column,
+                            "conversation_context": conversation_memory or "(No prior conversation.)",
                             "request": request_text,
                         }):
                             token = _extract_token(chunk.content) if hasattr(chunk, "content") else ""
@@ -359,7 +424,10 @@ async def chat(request: ChatRequest):
 
             # Stream answer tokens
             llm = get_llm()
-            llm_messages = [SystemMessage(content=system_prompt)] + messages
+            llm_messages = [SystemMessage(content=system_prompt)]
+            if memory_message:
+                llm_messages.append(memory_message)
+            llm_messages += compact_messages
 
             async for chunk in llm.astream(llm_messages):
                 token = _extract_token(chunk.content)
@@ -406,6 +474,15 @@ async def chat_sync(request: ChatRequest):
         else:
             messages.append(AIMessage(content=msg.content))
 
+    compact_messages, conversation_memory = compact_messages_for_llm(messages)
+    persistent_memory = _format_persistent_memory(request.memory_context)
+    if persistent_memory:
+        conversation_memory = (
+            "Persistent memory:\n"
+            + persistent_memory
+            + ("\n\nConversation memory:\n" + conversation_memory if conversation_memory else "")
+        )
+
     # Extract last user message for guard context
     last_user_msg = ""
     for msg in reversed(request.messages):
@@ -417,7 +494,7 @@ async def chat_sync(request: ChatRequest):
     # Build full PipelineState — same as the streaming endpoint
     # so RAG retrieval and web search work correctly here too.
     state = {
-        "messages": messages,
+        "messages": compact_messages,
         "document_ids": request.document_ids or [],
         "web_search_enabled": bool(request.web_search_sites),
         "web_search_sites": request.web_search_sites or [],
@@ -429,6 +506,8 @@ async def chat_sync(request: ChatRequest):
             "workspace_id": request.workspace_id,
             "user_id": request.user_id,
             "chat_id": request.chat_id,
+            "conversation_memory": conversation_memory,
+            "persistent_memory": persistent_memory,
         },
         "user_id": request.user_id or "",
         "chat_id": request.chat_id or "",
@@ -446,4 +525,3 @@ async def chat_sync(request: ChatRequest):
         ),
         intent=result.get("intent"),
     )
-

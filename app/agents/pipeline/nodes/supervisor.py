@@ -120,7 +120,11 @@ def _get_last_user_query(messages: list[BaseMessage]) -> str:
     return ""
 
 
-def _build_conversation_context(messages: list[BaseMessage], max_turns: int = 4) -> str:
+def _build_conversation_context(
+    messages: list[BaseMessage],
+    max_turns: int = 4,
+    conversation_memory: str = "",
+) -> str:
     """Build a short conversation summary for the supervisor LLM.
 
     Includes up to the last `max_turns` exchanges (user + assistant pairs)
@@ -130,8 +134,16 @@ def _build_conversation_context(messages: list[BaseMessage], max_turns: int = 4)
     # Collect all messages except the last user message
     history = messages[:-1] if messages and isinstance(messages[-1], HumanMessage) else messages[:]
 
+    memory_block = ""
+    if conversation_memory.strip():
+        memory_block = (
+            "## Conversation Memory\n"
+            + conversation_memory.strip()
+            + "\n\nUse this memory to resolve follow-up questions.\n\n"
+        )
+
     if not history:
-        return ""
+        return memory_block
 
     # Take the last max_turns * 2 messages (each turn = user + assistant)
     recent = history[-(max_turns * 2):]
@@ -144,10 +156,11 @@ def _build_conversation_context(messages: list[BaseMessage], max_turns: int = 4)
             lines.append(f"Assistant: {msg.content[:200]}")
 
     if not lines:
-        return ""
+        return memory_block
 
     return (
-        "## Recent Conversation History\n"
+        memory_block
+        + "## Recent Conversation History\n"
         + "\n".join(lines)
         + "\n\nUse this context to understand follow-up questions.\n\n"
     )
@@ -212,7 +225,10 @@ async def supervisor_node(state: PipelineState) -> dict:
 
     # ─── LLM Classification (with conversation context for follow-ups) ───
     agent_catalog = _build_agent_catalog()
-    conversation_context = _build_conversation_context(messages)
+    conversation_context = _build_conversation_context(
+        messages,
+        conversation_memory=metadata.get("conversation_memory", ""),
+    )
     system_prompt = _SUPERVISOR_PROMPT.format(
         agent_catalog=agent_catalog,
         web_status="ENABLED" if web_search_enabled else "DISABLED",
