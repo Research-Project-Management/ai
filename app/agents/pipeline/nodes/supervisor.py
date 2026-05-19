@@ -2,10 +2,10 @@
 Supervisor Node — Routes user requests to the correct pipeline worker.
 
 Decision flow:
-  1. Fast paths — empty query, greeting/thanks → end with early_reply
+  1. Fast paths — empty query, greeting/thanks (only on first message) → end with early_reply
   2. Explicit intent_hint from the FE → respect it
   3. document_ids present → force rag
-  4. LLM classification (JSON structured output) → best route
+  4. LLM classification (JSON structured output) with conversation context → best route
   5. Hard constraints (web disabled → reroute, etc.)
 """
 
@@ -15,7 +15,7 @@ import json
 import logging
 import re
 
-from langchain_core.messages import BaseMessage, HumanMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 
 from app.agents.registry import agent_descriptions
 from app.agents.pipeline.state import PipelineState
@@ -105,6 +105,7 @@ their uploaded documents.
 - Web search: {web_status}
 - User documents pinned: {docs_status}
 
+{conversation_context}
 IMPORTANT: Respond with ONLY a JSON object: {{"route": "<agent_name>", "reasoning": "brief reason"}}
 """
 
@@ -117,6 +118,44 @@ def _get_last_user_query(messages: list[BaseMessage]) -> str:
         if isinstance(msg, HumanMessage):
             return msg.content
     return ""
+
+
+def _build_conversation_context(messages: list[BaseMessage], max_turns: int = 4) -> str:
+    """Build a short conversation summary for the supervisor LLM.
+
+    Includes up to the last `max_turns` exchanges (user + assistant pairs)
+    EXCLUDING the final user message (which is passed separately as the query).
+    Returns an empty string if there is no prior history.
+    """
+    # Collect all messages except the last user message
+    history = messages[:-1] if messages and isinstance(messages[-1], HumanMessage) else messages[:]
+
+    if not history:
+        return ""
+
+    # Take the last max_turns * 2 messages (each turn = user + assistant)
+    recent = history[-(max_turns * 2):]
+
+    lines = []
+    for msg in recent:
+        if isinstance(msg, HumanMessage):
+            lines.append(f"User: {msg.content[:200]}")
+        elif isinstance(msg, AIMessage):
+            lines.append(f"Assistant: {msg.content[:200]}")
+
+    if not lines:
+        return ""
+
+    return (
+        "## Recent Conversation History\n"
+        + "\n".join(lines)
+        + "\n\nUse this context to understand follow-up questions.\n\n"
+    )
+
+
+def _has_prior_history(messages: list[BaseMessage]) -> bool:
+    """Return True if there is at least one prior AI response in the history."""
+    return any(isinstance(m, AIMessage) for m in messages)
 
 
 # ── Node ───────────────────────────────────────────────────────────────────
@@ -143,9 +182,12 @@ async def supervisor_node(state: PipelineState) -> dict:
         )
         return {"route": "end", "intent": "chat", "query_original": "", "early_reply": greeting}
 
-    # ─── Fast path: greeting / small-talk ───
-    if _GREETING_RE.match(query_original.strip()):
-        logger.info("Greeting detected → end")
+    # ─── Fast path: greeting / small-talk (only on the FIRST user message) ───
+    # If there is prior history (AI has already replied at least once), skip this
+    # fast-path so follow-up messages like "ok, tiếp tục" are handled by the LLM
+    # with the full conversation context instead of being swallowed as greetings.
+    if _GREETING_RE.match(query_original.strip()) and not _has_prior_history(messages):
+        logger.info("Greeting detected (first message) → end")
         if kb_available:
             reply = "Xin chào! Bạn muốn hỏi gì về tài liệu đã upload?"
         elif metadata.get("workspace_id"):
@@ -168,12 +210,14 @@ async def supervisor_node(state: PipelineState) -> dict:
     # users from performing actions (like creating tasks) while files were uploaded.
     # We now let the LLM classifier decide.
 
-    # ─── LLM Classification ───
+    # ─── LLM Classification (with conversation context for follow-ups) ───
     agent_catalog = _build_agent_catalog()
+    conversation_context = _build_conversation_context(messages)
     system_prompt = _SUPERVISOR_PROMPT.format(
         agent_catalog=agent_catalog,
         web_status="ENABLED" if web_search_enabled else "DISABLED",
         docs_status=f"YES ({len(document_ids)} files)" if kb_available else "NONE",
+        conversation_context=conversation_context,
     )
 
     route = "chat"
