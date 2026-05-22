@@ -57,7 +57,10 @@ async def retrieve_documents(
         filter_conditions.append(
             FieldCondition(key="metadata.user_id", match=MatchValue(value=user_id))
         )
-    if chat_id:
+    # Only enforce chat isolation if document_ids is not explicitly provided.
+    # This permits querying workspace library documents (which have chat_id="")
+    # when they are explicitly targeted by document_ids in a chat session.
+    if chat_id and not document_ids:
         filter_conditions.append(
             FieldCondition(key="metadata.chat_id", match=MatchValue(value=chat_id))
         )
