@@ -95,11 +95,18 @@ the SAME target line (the line you want to insert BEFORE)
   "text": "\\n\\\\begin{{figure}}[h]\\n  \\\\centering\\n  \\\\includegraphics[width=0.7\\\\linewidth]{{figures/name.png}}\\n  \\\\caption{{Caption here.}}\\n  \\\\label{{fig:name}}\\n\\\\end{{figure}}\\n"
 
 ### Response Format
-For **editing requests** (change, add, fix, replace, insert, remove, update):
-Return ONLY valid JSON in this exact schema — no markdown, no explanation outside the JSON:
+You must decide whether the user is requesting a **code edit** (to modify, insert, delete, or fix LaTeX code in the document) or a **general discussion/Q&A/explanation/greeting** (such as "bạn làm được gì", "hello", "explain this section", "translate this paragraph").
+
+1. For **general discussion, Q&A, greetings, explanation, or analysis requests** (ANY query that does not require making a concrete code modification to the document):
+   - **ALWAYS respond in normal Markdown.**
+   - Do **NOT** use the JSON format.
+   - Speak naturally and format lists or tables using standard Markdown.
+
+2. For **editing requests** that require making a concrete code modification to the document (e.g. "change title to...", "insert a table after...", "fix the syntax error on line 5"):
+   - Return **ONLY** a valid JSON object in this exact schema — no markdown fences around the JSON, no text outside the JSON:
 
 {{
-  "intent": "replace_range | insert_at_cursor | replace_selection | append_to_file | no_change",
+  "intent": "replace_range | insert_at_cursor | replace_selection | append_to_file",
   "explanation": "Short explanation for the user in their language",
   "edits": [
     {{
@@ -119,10 +126,6 @@ Return ONLY valid JSON in this exact schema — no markdown, no explanation outs
 - `insert_at_cursor`: Insert new content (figures, tables, sections) at a specific line
 - `replace_selection`: Replace the user's selected text only
 - `append_to_file`: Add to end of document body (before \\end{{document}})
-- `no_change`: When no edit is needed; explain why in `explanation`
-
-For **explanation/analysis requests** (/explain, /cite, translating, summarizing):
-You may respond with normal Markdown — no JSON required for pure Q&A.
 
 ### Safety Rules
 - Do NOT replace the entire file for a small request.
@@ -130,7 +133,7 @@ You may respond with normal Markdown — no JSON required for pure Q&A.
 - Before targeting a line, verify that the line number in the document shows the \
   expected content (e.g. `89: \\section{{Introduction}}`).
 - For multi-line inserts, ensure `text` uses `\\n` as escape — NOT literal newlines.
-- If unsure about the correct location, return `no_change` and explain.
+- If unsure about the correct location, explain it to the user in normal Markdown and do not make changes.
 
 ### Language
 Always respond (in explanation and previewText) in the **same language** as the user's request.
