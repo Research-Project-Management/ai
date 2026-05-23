@@ -21,17 +21,20 @@ Registration:
     The Supervisor will NOT offer it as a routing option (it's always
     triggered via intent_hint from the editor panel).
 """
-
 from __future__ import annotations
 
 import logging
+from contextvars import ContextVar
+from typing import AsyncIterator
 
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, SystemMessage, BaseMessage
 from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.tools import tool
+from langgraph.prebuilt import create_react_agent
 
 from app.agents.base import AgentState, BaseAgent
 from app.agents.registry import register_agent
-from app.config import get_llm
+from app.config import get_llm, get_agent_llm
 
 logger = logging.getLogger(__name__)
 
@@ -324,3 +327,116 @@ class LaTeXEditorAgent(BaseAgent):
         }
         state["messages"] = [AIMessage(content=content)]
         return state
+
+
+# ── Dynamic Context & Tools for Coordinator Agent ─────────────────────────────
+
+_editor_request_ctx: ContextVar[dict] = ContextVar("_editor_request_ctx", default={})
+
+
+@tool
+async def web_search(query: str) -> str:
+    """Search the web for up-to-date scientific information, recent academic publications, \
+references, and specific LaTeX package documentation.
+
+Use this tool ONLY when the user's request requires external knowledge, references recent research \
+or papers, asks about general scientific facts, or needs documentation for specific LaTeX packages.
+"""
+    from app.agents.web_search_agent import _search as web_search_func, _format_results as format_web_results
+    
+    logger.info("[LaTeXEditorAgent Tool] Web search query: %s", query)
+    results = web_search_func(query)
+    return format_web_results(results)
+
+
+@tool
+async def search_documents(query: str) -> str:
+    """Search within the user's uploaded documents, CVs, papers, and PDFs.
+
+Use this tool ONLY when the user's request refers to uploaded documents in their workspace, \
+needs to extract facts/data from uploaded files, or asks about content in their research documents.
+"""
+    from app.rag.retriever import retrieve_documents
+    
+    ctx = _editor_request_ctx.get()
+    doc_ids = ctx.get("document_ids", [])
+    user_id = ctx.get("user_id")
+    chat_id = ctx.get("chat_id")
+    
+    if not doc_ids:
+        return "[ERROR] No documents are currently uploaded in this chat session."
+        
+    logger.info("[LaTeXEditorAgent Tool] Document search query: %s | doc_ids: %s", query, doc_ids)
+    chunks = await retrieve_documents(
+        query,
+        document_ids=doc_ids,
+        user_id=user_id,
+        chat_id=chat_id,
+    )
+    
+    if not chunks:
+        return "No relevant information found in the uploaded documents."
+        
+    parts = []
+    for c in chunks:
+        parts.append(f"Source: {c['source']}\n{c['content']}")
+        
+    return "\n\n---\n\n".join(parts)
+
+
+def _dynamic_latex_prompt(state: dict) -> list:
+    ctx = _editor_request_ctx.get()
+    system_prompt = ctx.get("system_prompt", "")
+    messages = state.get("messages", [])
+    if system_prompt:
+        return [SystemMessage(content=system_prompt)] + list(messages)
+    return list(messages)
+
+
+_LATEX_EDITOR_GRAPH = create_react_agent(
+    model=get_agent_llm(),
+    tools=[web_search, search_documents],
+    prompt=_dynamic_latex_prompt,
+)
+
+
+from app.agents.utils import _extract_token
+
+async def stream_latex_editor(
+    messages: list[BaseMessage],
+    system_prompt: str,
+    document_ids: list[str],
+    user_id: str = "",
+    chat_id: str = "",
+) -> AsyncIterator[str]:
+    """Stream token-by-token events from the LaTeX Editor ReAct agent graph."""
+    
+    _editor_request_ctx.set({
+        "document_ids": document_ids,
+        "user_id": user_id,
+        "chat_id": chat_id,
+        "system_prompt": system_prompt,
+    })
+    
+    in_tool_call = False
+    
+    async for event in _LATEX_EDITOR_GRAPH.astream_events(
+        {"messages": messages}, version="v2"
+    ):
+        kind = event.get("event", "")
+        
+        if kind == "on_tool_start":
+            in_tool_call = True
+        elif kind == "on_tool_end":
+            in_tool_call = False
+            
+        elif kind == "on_chat_model_stream" and not in_tool_call:
+            chunk = event.get("data", {}).get("chunk")
+            if chunk and hasattr(chunk, "content") and chunk.content:
+                additional = getattr(chunk, "additional_kwargs", {})
+                if additional.get("tool_calls"):
+                    continue
+                token = _extract_token(chunk.content)
+                if token:
+                    yield f"data: {token.replace(chr(10), chr(92) + 'n')}\n\n"
+

@@ -362,7 +362,8 @@ async def chat(request: ChatRequest):
                     # agent.run() + word-split chunking.
                     if route == "latex_editor":
                         from app.agents.latex_editor_agent import (
-                            LATEX_EDITOR_PROMPT,
+                            stream_latex_editor,
+                            LATEX_EDITOR_SYSTEM,
                             _add_line_numbers,
                             _build_selection_context,
                             _build_selection_info,
@@ -393,31 +394,26 @@ async def chat(request: ChatRequest):
                             selection_end_line, selection_end_column
                         )
 
-                        # Get last user message
-                        request_text = ""
-                        for msg in reversed(messages):
-                            if hasattr(msg, "type") and msg.type == "human":
-                                request_text = msg.content
-                                break
-                        if not request_text and messages:
-                            request_text = str(messages[-1].content)
+                        # Formulate the system prompt with full Monaco/LaTeX context
+                        system_prompt = LATEX_EDITOR_SYSTEM.format(
+                            filename=filename,
+                            file_content_with_line_numbers=file_content_with_line_numbers,
+                            selection_context=selection_ctx,
+                            selection_info=selection_info,
+                            cursor_line=cursor_line,
+                            cursor_column=cursor_column,
+                            conversation_context=conversation_memory or "(No prior conversation.)",
+                        )
 
-                        # Real token-by-token streaming via LLM astream
-                        llm = get_llm()
-                        chain = LATEX_EDITOR_PROMPT | llm
-                        async for chunk in chain.astream({
-                            "filename": filename,
-                            "file_content_with_line_numbers": file_content_with_line_numbers,
-                            "selection_context": selection_ctx,
-                            "selection_info": selection_info,
-                            "cursor_line": cursor_line,
-                            "cursor_column": cursor_column,
-                            "conversation_context": conversation_memory or "(No prior conversation.)",
-                            "request": request_text,
-                        }):
-                            token = _extract_token(chunk.content) if hasattr(chunk, "content") else ""
-                            if token:
-                                yield f"data: {token.replace(chr(10), chr(92) + 'n')}\n\n"
+                        # Stream via the coordinator ReAct agent graph (supports search tools)
+                        async for chunk in stream_latex_editor(
+                            messages=messages,
+                            system_prompt=system_prompt,
+                            document_ids=request.document_ids or [],
+                            user_id=request.user_id or "",
+                            chat_id=request.chat_id or "",
+                        ):
+                            yield chunk
 
                         yield f"data: [META]{json.dumps({'agent': 'latex_editor', 'intent': 'latex_editor', 'sources': []})}\n\n"
                         yield "data: [DONE]\n\n"
