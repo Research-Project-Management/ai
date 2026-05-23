@@ -83,6 +83,7 @@ the document above, use `"type": "replace"` with its exact line number.
 8. **For inserting new blocks** (figures, tables, equations, sections): \
 look at the line-numbered document, find the ANCHOR line (e.g. \\section{{Introduction}}), \
 then insert AFTER the next blank line or after the first \\label in that section.
+9. **ALWAYS replace full lines to avoid leaving trailing text.** If your replacement affects the end of a line (e.g. replacing a command like \\title, \\section, etc. that spans to the end of a line), ALWAYS set `startColumn` to `1` and `endColumn` to `999` so it replaces all characters up to the end of that line. This is CRITICAL to prevent syntax errors like leaving trailing braces or characters from the old line.
 
 ### Inserting Multi-line Environments (VERY IMPORTANT)
 When inserting \\begin{{figure}}, \\begin{{table}}, \\begin{{equation}}, or any \
@@ -115,9 +116,9 @@ You must decide whether the user is requesting a **code edit** (to modify, inser
     {{
       "type": "replace | insert | delete",
       "startLineNumber": <1-based line number from the line-numbered document above>,
-      "startColumn": <1-based column number>,
+      "startColumn": <1-based column number (ALWAYS use 1 if replacing the start of the line)>,
       "endLineNumber": <1-based line number>,
-      "endColumn": <1-based column number>,
+      "endColumn": <1-based column number (ALWAYS use 999 to replace up to the end of the line to prevent leaving trailing characters)>,
       "text": "exact text (use \\n for newlines in JSON)"
     }}
   ],
