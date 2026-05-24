@@ -51,19 +51,18 @@ async def retrieve_documents(
                 match=MatchAny(any=document_ids),
             )
         )
-
-    # Always enforce user + chat isolation when provided
-    if user_id:
-        filter_conditions.append(
-            FieldCondition(key="metadata.user_id", match=MatchValue(value=user_id))
-        )
-    # Only enforce chat isolation if document_ids is not explicitly provided.
-    # This permits querying workspace library documents (which have chat_id="")
-    # when they are explicitly targeted by document_ids in a chat session.
-    if chat_id and not document_ids:
-        filter_conditions.append(
-            FieldCondition(key="metadata.chat_id", match=MatchValue(value=chat_id))
-        )
+    else:
+        # Only enforce user + chat isolation if no explicit document IDs are targeted.
+        # This prevents querying unauthorized documents while allowing full access
+        # to explicitly pinned/selected documents in a collaborative workspace.
+        if user_id:
+            filter_conditions.append(
+                FieldCondition(key="metadata.user_id", match=MatchValue(value=user_id))
+            )
+        if chat_id:
+            filter_conditions.append(
+                FieldCondition(key="metadata.chat_id", match=MatchValue(value=chat_id))
+            )
 
     search_kwargs: dict[str, Any] = {}
     if filter_conditions:

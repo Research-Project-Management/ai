@@ -82,8 +82,14 @@ async def rag_node(state: PipelineState) -> dict:
     if not query_original:
         return {"rag_context": "", "route": "done", "sources": []}
 
+    metadata = state.get("metadata", {}) or {}
+    selected_excerpt = str(metadata.get("selection") or "").strip()
+    retrieval_query = query_original
+    if selected_excerpt:
+        retrieval_query = f"{query_original}\n\nSelected excerpt from the target document:\n{selected_excerpt[:1500]}"
+
     # Translate for reranking
-    query_en = await asyncio.to_thread(_translate_to_english, query_original)
+    query_en = await asyncio.to_thread(_translate_to_english, retrieval_query)
 
     # Determine retrieval strategy
     if _is_summarize(query_original):
