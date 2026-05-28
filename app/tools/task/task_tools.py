@@ -30,6 +30,7 @@ def _slim_task(task: dict, column_name: str = "") -> dict:
              createdAt, updatedAt, rank, reminder, recurrence, estimate, labels.
     """
     assignee = task.get("assignee")
+    project = task.get("project")
     return {
         "id": str(task.get("_id", "")),
         "identifier": task.get("identifier", ""),
@@ -44,6 +45,7 @@ def _slim_task(task: dict, column_name: str = "") -> dict:
         "dueDate": task.get("dueDate"),
         "startDate": task.get("startDate"),
         "assignee": {"id": str(assignee.get("_id", "")), "name": assignee.get("name", "")} if assignee else None,
+        "project": {"id": str(project.get("_id", "")), "name": project.get("name", ""), "avatar": project.get("avatar")} if isinstance(project, dict) else None,
         "commentCount": task.get("commentCount", 0),
         "cycle": task.get("cycle"),
         "parentTask": task.get("parentTask"),
