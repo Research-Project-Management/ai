@@ -77,9 +77,27 @@ async def rag_node(state: PipelineState) -> dict:
     query_original = state.get("query_original", "")
     document_ids = state.get("document_ids", [])
     web_search_enabled = state.get("web_search_enabled", False)
+    user_id = state.get("user_id") or ""
+    chat_id = state.get("chat_id") or ""
 
     if not query_original:
         return {"rag_context": "", "route": "done", "sources": []}
+
+    # ── RAG isolation guard ────────────────────────────────────────────────
+    # Without document_ids or chat_id we can only filter by user_id, which
+    # would return chunks from *every* previous session — a data leak.
+    # Bail out early and fall through to web-search or chat instead.
+    if not document_ids and not chat_id:
+        logger.info(
+            "RAG skipped: no document_ids and no chat_id (user=%s) — "
+            "would leak cross-session data",
+            user_id,
+        )
+        return {
+            "rag_context": "",
+            "route": "web" if web_search_enabled else "done",
+            "sources": [],
+        }
 
     metadata = state.get("metadata", {}) or {}
     selected_excerpt = str(metadata.get("selection") or "").strip()

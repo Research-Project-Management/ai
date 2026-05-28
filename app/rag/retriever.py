@@ -52,17 +52,24 @@ async def retrieve_documents(
             )
         )
     else:
-        # Only enforce user + chat isolation if no explicit document IDs are targeted.
-        # This prevents querying unauthorized documents while allowing full access
-        # to explicitly pinned/selected documents in a collaborative workspace.
+        # Require at least chat_id to scope the search.
+        # If we only have user_id (no doc_ids, no chat_id), querying would
+        # return chunks from ALL previous sessions — a data leak.  Bail out.
+        if not chat_id:
+            logger.warning(
+                "retrieve_documents: refusing query — no document_ids and no chat_id "
+                "(user=%s). Would leak cross-session data.",
+                user_id,
+            )
+            return []
+
         if user_id:
             filter_conditions.append(
                 FieldCondition(key="metadata.user_id", match=MatchValue(value=user_id))
             )
-        if chat_id:
-            filter_conditions.append(
-                FieldCondition(key="metadata.chat_id", match=MatchValue(value=chat_id))
-            )
+        filter_conditions.append(
+            FieldCondition(key="metadata.chat_id", match=MatchValue(value=chat_id))
+        )
 
     search_kwargs: dict[str, Any] = {}
     if filter_conditions:
