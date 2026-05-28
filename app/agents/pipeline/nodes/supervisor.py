@@ -237,6 +237,7 @@ async def supervisor_node(state: PipelineState) -> dict:
     )
 
     route = "chat"
+    reasoning = ""
     try:
         llm = get_router_llm()
         response = await llm.ainvoke([
@@ -246,13 +247,39 @@ async def supervisor_node(state: PipelineState) -> dict:
 
         content = response.content if isinstance(response.content, str) else str(response.content)
         clean = content.strip()
+
+        # Strip markdown code fences if present
         if clean.startswith("```"):
             clean = clean.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
 
-        parsed = json.loads(clean)
-        route = parsed.get("route", "chat")
-        reasoning = parsed.get("reasoning", "")
-        logger.info("LLM classification: route=%s reasoning=%s", route, reasoning)
+        # Strategy 1: standard JSON parse
+        parsed = None
+        try:
+            parsed = json.loads(clean)
+        except json.JSONDecodeError:
+            pass
+
+        # Strategy 2: fix single-quoted keys/values → double quotes, then retry
+        if parsed is None:
+            try:
+                fixed = re.sub(r"'([^']*)'", r'"\1"', clean)
+                parsed = json.loads(fixed)
+            except json.JSONDecodeError:
+                pass
+
+        # Strategy 3: regex extraction — grab route value regardless of JSON validity
+        if parsed is None:
+            m = re.search(r'["\']?route["\']?\s*:\s*["\']?(\w+)["\']?', clean, re.IGNORECASE)
+            if m:
+                parsed = {"route": m.group(1)}
+                logger.info("Supervisor: regex-extracted route=%s from malformed JSON", parsed["route"])
+
+        if parsed is not None:
+            route = parsed.get("route", "chat")
+            reasoning = parsed.get("reasoning", "")
+            logger.info("LLM classification: route=%s reasoning=%s", route, reasoning)
+        else:
+            raise ValueError(f"Could not parse supervisor response: {clean[:200]}")
 
     except Exception as exc:
         logger.warning("Supervisor LLM failed: %s → fallback", exc)
