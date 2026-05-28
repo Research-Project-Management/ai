@@ -77,6 +77,13 @@ Use `delegate_parallel` when the user asks for information from **2+ independent
 - "project members + cycles" → `delegate_parallel(project_request=..., cycle_request=...)`
 - "tóm tắt workspace và tasks" → `delegate_parallel(workspace_request=..., task_request=...)`
 
+## Workspace-Level Queries (No Project Selected)
+When no project is active and user asks about tasks:
+- "tôi có bao nhiêu task" → `delegate_to_task_agent("List all my tasks using get_my_tasks")`
+- "tóm tắt công việc" → `delegate_to_task_agent("Get all my tasks across projects using get_my_tasks")`
+- "tổng quan workspace" → `delegate_to_workspace_agent("Generate workspace team summary")`
+Do NOT ask user to select a project for these — the tools handle workspace-level queries natively.
+
 Do NOT use `delegate_parallel` when results depend on each other (e.g., create task then assign).
 
 ## Sequential Multi-Agent Workflows
@@ -102,7 +109,13 @@ def _build_orchestrator_prompt(
     project_note = (
         f"⚡ **Active Project**: `{project_id}` — pass this as context when delegating to Task/Project agents.\n"
         if project_id
-        else "ℹ️ No active project — ask user to select one if project-specific info is needed.\n"
+        else (
+            "ℹ️ **No active project selected** — the user is at workspace level.\n"
+            "When the user asks about tasks, use `delegate_to_task_agent` with a request like "
+            "'List all my tasks across the workspace using get_my_tasks' — this tool works WITHOUT a project_id.\n"
+            "For workspace-wide overviews, use `delegate_to_workspace_agent` with `generate_team_summary`.\n"
+            "Only ask the user to select a project if they need project-SPECIFIC operations (create/update/delete tasks, project settings).\n"
+        )
     )
     return ORCHESTRATOR_SYSTEM_PROMPT.format(
         agent_catalog=build_orchestrator_catalog(),

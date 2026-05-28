@@ -128,7 +128,11 @@ class TaskSubAgent(BaseSubAgent):
         project_note = (
             f"⚡ **Active Project**: `{project_id}` — use this ID for task operations.\n"
             if project_id
-            else "ℹ️ No project selected — ask the Orchestrator to provide one if needed.\n"
+            else (
+                "ℹ️ **No project selected** — user is at workspace level.\n"
+                "Use `get_my_tasks()` to list tasks across ALL projects.\n"
+                "Do NOT ask user to select a project for listing tasks.\n"
+            )
         )
         return _SYSTEM_PROMPT.format(
             workspace_id=task.workspace_id or "N/A",
