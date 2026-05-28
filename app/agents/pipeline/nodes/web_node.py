@@ -16,7 +16,6 @@ import logging
 from typing import Any
 
 from app.agents.pipeline.state import PipelineState
-from app.agents.utils import _translate_to_english
 from app.config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -87,39 +86,71 @@ async def web_research_node(state: PipelineState) -> dict:
     if not query_original:
         return {"web_context": "", "route": "done"}
 
-    # Translate to English for search
-    query_en = state.get("query_en") or await asyncio.to_thread(
-        _translate_to_english, query_original
+    # Translate to English for search (async, cached)
+    from app.agents.utils import translate_to_english_async
+
+    query_en = state.get("query_en") or await translate_to_english_async(
+        query_original
     )
 
-    # ─── DDG + OpenAlex ───
-    results: list[dict] = []
-    try:
-        from app.agents.web_search_agent import _search
-
-        results = await asyncio.to_thread(_search, query_en, web_search_sites or None)
-        logger.info("DDG + OpenAlex: %d results", len(results))
-    except Exception as exc:
-        logger.warning("DDG/OpenAlex search failed: %s", exc)
-
-    # ─── Tavily (optional) ───
+    # ─── Run all search sources in PARALLEL ───────────────────────
     settings = get_settings()
-    if settings.tavily_api_key:
-        try:
-            tavily_results = await asyncio.to_thread(
-                _search_tavily, query_en, settings.tavily_api_key, web_search_sites
-            )
-            logger.info("Tavily: %d results", len(tavily_results))
 
-            # Merge + dedup by URL
-            seen_urls = {r.get("href", r.get("url", "")) for r in results if r.get("href") or r.get("url")}
-            for tr in tavily_results:
-                url = tr.get("href", tr.get("url", ""))
-                if url and url not in seen_urls:
-                    seen_urls.add(url)
-                    results.append(tr)
+    async def _run_ddg_openalex() -> list[dict]:
+        """DDG + OpenAlex (internally parallelized via ThreadPoolExecutor)."""
+        try:
+            from app.agents.web_search_agent import _search
+
+            return await asyncio.to_thread(
+                _search,
+                query_en,
+                web_search_sites or None,
+                pre_translated_query=query_en,
+            )
+        except Exception as exc:
+            logger.warning("DDG/OpenAlex search failed: %s", exc)
+            return []
+
+    async def _run_tavily() -> list[dict]:
+        """Tavily search (if API key configured)."""
+        if not settings.tavily_api_key:
+            return []
+        try:
+            return await asyncio.to_thread(
+                _search_tavily,
+                query_en,
+                settings.tavily_api_key,
+                web_search_sites,
+            )
         except Exception as exc:
             logger.warning("Tavily search failed: %s", exc)
+            return []
+
+    # Fire both searches concurrently
+    ddg_oalex_results, tavily_results = await asyncio.gather(
+        _run_ddg_openalex(),
+        _run_tavily(),
+    )
+
+    logger.info(
+        "Parallel search done: DDG+OpenAlex=%d, Tavily=%d",
+        len(ddg_oalex_results),
+        len(tavily_results),
+    )
+
+    # ─── Merge + dedup Tavily results ─────────────────────────────
+    results = ddg_oalex_results
+    if tavily_results:
+        seen_urls = {
+            r.get("href", r.get("url", ""))
+            for r in results
+            if r.get("href") or r.get("url")
+        }
+        for tr in tavily_results:
+            url = tr.get("href", tr.get("url", ""))
+            if url and url not in seen_urls:
+                seen_urls.add(url)
+                results.append(tr)
 
     if not results:
         logger.info("No web results found")

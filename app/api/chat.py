@@ -42,7 +42,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["chat"])
 
 
-from app.agents.utils import _extract_token
+from app.agents.utils import _extract_token, clear_translation_cache
 
 
 RESPONSE_QUALITY_GUIDE = (
@@ -241,6 +241,7 @@ async def chat(request: ChatRequest):
     # Generate short trace ID for this request (8 hex chars)
     trace_id = uuid.uuid4().hex[:8]
     set_trace_id(trace_id)
+    clear_translation_cache()
     logger.info("[%s] CHAT user=%s intent=%s", trace_id, request.user_id, request.intent_hint)
 
     # Extract the last user message for server-side confirmation guards

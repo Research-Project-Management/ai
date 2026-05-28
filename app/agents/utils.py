@@ -51,3 +51,45 @@ def _translate_to_english(text: str, context_prompt: str = "Translate the follow
     except Exception as exc:
         logger.warning("Query translation failed, using original: %s", exc)
         return text
+
+
+# ── Request-scoped translation cache ──────────────────────────────────────
+_translation_cache: dict[str, str] = {}
+
+
+def clear_translation_cache() -> None:
+    """Clear the translation cache. Call at the start of each request."""
+    _translation_cache.clear()
+
+
+async def translate_to_english_async(text: str, context_prompt: str = "Translate the following text to English.") -> str:
+    """Async version of _translate_to_english with request-scoped caching."""
+    if not text or not text.strip():
+        return text
+
+    if text in _translation_cache:
+        logger.info("Translation cache hit: %r", text[:60])
+        return _translation_cache[text]
+
+    try:
+        llm = get_llm(temperature=0)
+        response = await llm.ainvoke(
+            [
+                {
+                    "role": "system",
+                    "content": (
+                        f"{context_prompt} "
+                        "Return ONLY the translated query, nothing else. "
+                        "If it is already in English, return it unchanged."
+                    ),
+                },
+                {"role": "user", "content": text},
+            ]
+        )
+        translated = response.content.strip()
+        logger.info("Translated query (async): %r → %r", text[:60], translated[:60])
+        _translation_cache[text] = translated
+        return translated
+    except Exception as exc:
+        logger.warning("Async query translation failed, using original: %s", exc)
+        return text

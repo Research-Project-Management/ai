@@ -156,40 +156,75 @@ def _search_openalex(query: str, sites: list[str], max_results: int = _OPENALEX_
         return []
 
 
-def _search(query: str, sites: list[str] | None = None, max_results: int = _MAX_RESULTS) -> list[dict]:
+def _search(
+    query: str,
+    sites: list[str] | None = None,
+    max_results: int = _MAX_RESULTS,
+    pre_translated_query: str | None = None,
+) -> list[dict]:
     """Merge DuckDuckGo + OpenAlex results, deduplicated by URL.
 
     Strategy:
     1. Issue targeted DDG queries with site: operator for priority sites
     2. Issue a broad DDG query and post-filter by allowed sites
     3. If both produce 0 results, return the unfiltered broad DDG results as fallback
-    4. Always run OpenAlex in parallel for academic enrichment
+    4. Run DDG queries + OpenAlex in PARALLEL for speed
+
+    Args:
+        pre_translated_query: If the caller already translated the query to
+            English, pass it here to avoid a redundant LLM translation call.
     """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
     _sites = sites or DEFAULT_ACADEMIC_SITES
     user_has_sites = sites is not None and len(sites) > 0
 
-    # OpenAlex is English-indexed — translate before searching
-    english_query = _translate_to_english(query)
+    # Use pre-translated query if available, otherwise translate now
+    english_query = pre_translated_query or _translate_to_english(query)
 
-    # ── DDG searches: targeted + broad ──────────────────────────
+    # ── Build DDG queries ──────────────────────────────────────────
     ddg_queries = _build_site_queries(query, _sites)
+
+    # ── Run DDG queries + OpenAlex in PARALLEL ─────────────────────
     all_ddg: list[dict] = []
-    broad_ddg: list[dict] = []  # unfiltered broad results (last query)
+    broad_ddg: list[dict] = []
+    oalex: list[dict] = []
+    broad_index = len(ddg_queries) - 1  # last query is always the broad one
 
-    for i, q in enumerate(ddg_queries):
-        results = _search_ddg(q, max_results=max_results)
-        is_broad = (i == len(ddg_queries) - 1)  # last query is always the broad one
+    with ThreadPoolExecutor(max_workers=min(len(ddg_queries) + 1, 5)) as pool:
+        # Submit all DDG queries
+        ddg_futures = {
+            pool.submit(_search_ddg, q, max_results): i
+            for i, q in enumerate(ddg_queries)
+        }
+        # Submit OpenAlex concurrently
+        oalex_future = pool.submit(
+            _search_openalex, english_query, sites=_sites, max_results=_OPENALEX_MAX,
+        )
 
-        if is_broad:
-            broad_ddg = results[:]
-            # Post-filter broad results by allowed sites (only if user specified sites)
-            if user_has_sites:
-                results = [r for r in results if any(site in r.get("href", "") for site in _sites)]
-        # targeted queries already have site: so all results are relevant
-        all_ddg.extend(results)
+        # Collect DDG results
+        for future in as_completed(ddg_futures):
+            idx = ddg_futures[future]
+            try:
+                results = future.result()
+            except Exception as exc:
+                logger.warning("DDG query %d failed: %s", idx, exc)
+                results = []
 
-    # ── OpenAlex ──────────────────────────────────────────────────
-    oalex = _search_openalex(english_query, sites=_sites, max_results=_OPENALEX_MAX)
+            if idx == broad_index:
+                broad_ddg = results[:]
+                if user_has_sites:
+                    results = [
+                        r for r in results
+                        if any(site in r.get("href", "") for site in _sites)
+                    ]
+            all_ddg.extend(results)
+
+        # Collect OpenAlex results
+        try:
+            oalex = oalex_future.result()
+        except Exception as exc:
+            logger.warning("OpenAlex search failed in parallel: %s", exc)
 
     # ── Merge + deduplicate ───────────────────────────────────────
     seen: set[str] = set()

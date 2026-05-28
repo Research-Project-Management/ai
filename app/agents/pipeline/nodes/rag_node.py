@@ -18,7 +18,6 @@ import re
 
 from app.agents.pipeline.state import PipelineState
 from app.agents.pipeline.reranker import rerank_chunks
-from app.agents.utils import _translate_to_english
 from app.config import get_router_llm
 
 logger = logging.getLogger(__name__)
@@ -89,7 +88,8 @@ async def rag_node(state: PipelineState) -> dict:
         retrieval_query = f"{query_original}\n\nSelected excerpt from the target document:\n{selected_excerpt[:1500]}"
 
     # Translate for reranking
-    query_en = await asyncio.to_thread(_translate_to_english, retrieval_query)
+    from app.agents.utils import translate_to_english_async
+    query_en = await translate_to_english_async(retrieval_query)
 
     # Determine retrieval strategy
     if _is_summarize(query_original):
@@ -146,40 +146,53 @@ async def rag_node(state: PipelineState) -> dict:
 
     # ─── RagJudge: is context sufficient? ───
     next_route = "done"
-    try:
-        judge_llm = get_router_llm()
-        judge_prompt = (
-            "You are a judge evaluating whether retrieved text is sufficient "
-            "and relevant to answer the question.\n\n"
-            "Criteria:\n"
-            "- Directly addresses the main question\n"
-            "- Enough detail for a clear answer\n"
-            "- Specific and relevant, not vague\n\n"
-            'Respond with ONLY JSON: {"sufficient": true/false, "reasoning": "brief"}'
+
+    # Smart skip: if we have enough high-quality chunks, skip the LLM judge call
+    avg_score = sum(c.get("score", 0) for c in chunks) / len(chunks) if chunks else 0
+    if len(chunks) >= 5 and avg_score >= 0.5:
+        logger.info(
+            "RagJudge SKIPPED: %d chunks, avg_score=%.2f → sufficient",
+            len(chunks), avg_score,
         )
-        judge_response = await judge_llm.ainvoke([
-            {"role": "system", "content": judge_prompt},
-            {"role": "user", "content": (
-                f"Question: {query_original}\n\n"
-                f"Retrieved context:\n{rag_context[:8000]}\n\n"
-                "Is this sufficient?"
-            )},
-        ])
+    elif not web_search_enabled:
+        # No point judging if web search isn't available as fallback
+        logger.info("RagJudge SKIPPED: web_search not enabled")
+    else:
+        # Borderline case — call LLM judge
+        try:
+            judge_llm = get_router_llm()
+            judge_prompt = (
+                "You are a judge evaluating whether retrieved text is sufficient "
+                "and relevant to answer the question.\n\n"
+                "Criteria:\n"
+                "- Directly addresses the main question\n"
+                "- Enough detail for a clear answer\n"
+                "- Specific and relevant, not vague\n\n"
+                'Respond with ONLY JSON: {"sufficient": true/false, "reasoning": "brief"}'
+            )
+            judge_response = await judge_llm.ainvoke([
+                {"role": "system", "content": judge_prompt},
+                {"role": "user", "content": (
+                    f"Question: {query_original}\n\n"
+                    f"Retrieved context:\n{rag_context[:8000]}\n\n"
+                    "Is this sufficient?"
+                )},
+            ])
 
-        judge_content = judge_response.content if isinstance(judge_response.content, str) else str(judge_response.content)
-        judge_clean = judge_content.strip()
-        if judge_clean.startswith("```"):
-            judge_clean = judge_clean.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+            judge_content = judge_response.content if isinstance(judge_response.content, str) else str(judge_response.content)
+            judge_clean = judge_content.strip()
+            if judge_clean.startswith("```"):
+                judge_clean = judge_clean.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
 
-        verdict = json.loads(judge_clean)
-        sufficient = verdict.get("sufficient", True)
-        logger.info("RagJudge: sufficient=%s reasoning=%s", sufficient, verdict.get("reasoning", ""))
+            verdict = json.loads(judge_clean)
+            sufficient = verdict.get("sufficient", True)
+            logger.info("RagJudge: sufficient=%s reasoning=%s", sufficient, verdict.get("reasoning", ""))
 
-        if not sufficient and web_search_enabled:
-            next_route = "web"
+            if not sufficient:
+                next_route = "web"
 
-    except Exception as exc:
-        logger.warning("RagJudge failed: %s → treat as sufficient", exc)
+        except Exception as exc:
+            logger.warning("RagJudge failed: %s → treat as sufficient", exc)
 
     return {
         "rag_context": rag_context,

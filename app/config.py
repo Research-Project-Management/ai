@@ -81,9 +81,12 @@ def get_settings() -> Settings:
     return Settings()
 
 
+_llm_cache: dict[tuple, object] = {}
+
+
 def get_llm(temperature: float = 0.7, model: str | None = None, provider: str | None = None):
     """
-    LLM factory — returns the active chat model.
+    LLM factory — returns the active chat model (cached by config tuple).
 
     Configure via .env:
         LLM_PROVIDER=gemini   # default — uses Google Gemini
@@ -96,6 +99,17 @@ def get_llm(temperature: float = 0.7, model: str | None = None, provider: str | 
     active_provider = provider or settings.llm_provider
 
     if active_provider == "ollama":
+        active_model = model or settings.ollama_model
+    elif active_provider == "groq":
+        active_model = model or settings.groq_model
+    else:
+        active_model = model or settings.llm_model
+
+    cache_key = (active_provider, active_model, temperature)
+    if cache_key in _llm_cache:
+        return _llm_cache[cache_key]
+
+    if active_provider == "ollama":
         try:
             from langchain_ollama import ChatOllama  # noqa: PLC0415
         except ImportError:
@@ -103,13 +117,12 @@ def get_llm(temperature: float = 0.7, model: str | None = None, provider: str | 
                 "langchain-ollama is not installed. "
                 "Run: pip install langchain-ollama  (or see requirements-optional.txt)"
             )
-        return ChatOllama(
-            model=model or settings.ollama_model,
+        llm = ChatOllama(
+            model=active_model,
             base_url=settings.ollama_base_url,
             temperature=temperature,
         )
-
-    if active_provider == "groq":
+    elif active_provider == "groq":
         try:
             from langchain_groq import ChatGroq  # noqa: PLC0415
         except ImportError:
@@ -117,18 +130,21 @@ def get_llm(temperature: float = 0.7, model: str | None = None, provider: str | 
                 "langchain-groq is not installed. "
                 "Run: pip install langchain-groq  (or see requirements-optional.txt)"
             )
-        return ChatGroq(
-            model=model or settings.groq_model,
+        llm = ChatGroq(
+            model=active_model,
             api_key=settings.groq_api_key,
             temperature=temperature,
         )
+    else:
+        from langchain_google_genai import ChatGoogleGenerativeAI
+        llm = ChatGoogleGenerativeAI(
+            model=active_model,
+            google_api_key=settings.gemini_api_key,
+            temperature=temperature,
+        )
 
-    from langchain_google_genai import ChatGoogleGenerativeAI
-    return ChatGoogleGenerativeAI(
-        model=model or settings.llm_model,
-        google_api_key=settings.gemini_api_key,
-        temperature=temperature,
-    )
+    _llm_cache[cache_key] = llm
+    return llm
 
 
 def get_router_llm():
