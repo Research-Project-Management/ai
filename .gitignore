@@ -6,15 +6,19 @@ dist/
 build/
 .venv/
 venv/
+.pytest_cache/
+.ruff_cache/
 
 # Environment
 .env
+.env.*
+!.env.example
 
 # IDE
 .vscode/
 .idea/
 
-# Data
-*.pdf
-uploads/
-qdrant_data/
+# Runtime SearXNG artifacts (keep settings.yml tracked)
+infra/searxng/limiter.toml
+infra/searxng/uwsgi.ini
+infra/searxng/*.bak
