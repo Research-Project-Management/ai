@@ -1,33 +1,17 @@
-# ── Stage 1: Install dependencies ─────────────────────────────────────────────
-FROM python:3.12-slim AS builder
+FROM python:3.12-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
 
 WORKDIR /app
 
-# System deps for packages that need compilation (minimal)
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    gcc \
-    && rm -rf /var/lib/apt/lists/*
+RUN pip install --no-cache-dir --upgrade pip
 
-COPY requirements.txt .
+COPY pyproject.toml ./
+COPY src ./src
 
-# Install into a prefix dir so we can copy cleanly
-RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
+RUN pip install --no-cache-dir .
 
+EXPOSE 18420
 
-# ── Stage 2: Runtime image ─────────────────────────────────────────────────────
-FROM python:3.12-slim AS runtime
-
-WORKDIR /app
-
-# Copy installed packages from builder
-COPY --from=builder /install /usr/local
-
-# Copy source code only (exclude .venv, __pycache__, tests, .git)
-COPY app ./app
-COPY pyproject.toml .
-
-# Expose port
-EXPOSE 3000
-
-# Run server
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "3000"]
+CMD ["uvicorn", "ai.main:app", "--host", "0.0.0.0", "--port", "18420"]

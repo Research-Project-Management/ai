@@ -1,30 +1,138 @@
+name: ai-service
+
 services:
-  # ── Flux-AI Server ──────────────────────────────────────────────
-  flux-ai:
-    build: .
-    container_name: flux-ai
-    ports:
-      - "${PORT:-3000}:3000"
-    env_file: .env
-    environment:
-      # Số worker processes — mỗi worker xử lý 1 asyncio event loop độc lập.
-      # Dev: 1 worker (--reload để hot-reload)
-      # Prod: 4 workers (true parallelism, handle nhiều user đồng thời)
-      UVICORN_WORKERS: "${UVICORN_WORKERS:-4}"
-    volumes:
-      - ./uploads:/app/uploads
-      - /root/.cache/huggingface:/root/.cache/huggingface  # Cache CrossEncoder model
-    command:
-      [
-        "uvicorn",
-        "app.main:app",
-        "--host", "0.0.0.0",
-        "--port", "3000",
-        "--workers", "${UVICORN_WORKERS:-4}",
-        "--loop", "uvloop",
-        "--http", "httptools",
-      ]
+  ai-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ai_api
     restart: unless-stopped
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    # Qdrant Cloud + Redis local đã có sẵn, không cần depends_on
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      PORT: 18420
+      DATABASE_URL: "postgresql://${POSTGRES_USER:-ai_user}:${POSTGRES_PASSWORD:-ai_password}@ai-postgres:5432/${POSTGRES_DB:-ai_db}"
+      REDIS_URL: "redis://ai-redis:6379"
+      QDRANT_URL: "http://ai-qdrant:6333"
+      WEB_SEARCH_SEARXNG_URL: "http://ai-searxng:8080"
+      EMBEDDING_BASE_URL: "http://ai-ollama:11434/v1"
+      LIBRARY_BACKEND_URL: "${LIBRARY_BACKEND_URL:-http://host.docker.internal:3000}"
+    ports:
+      - "127.0.0.1:18420:18420"
+    depends_on:
+      ai-postgres:
+        condition: service_healthy
+      ai-redis:
+        condition: service_healthy
+      ai-qdrant:
+        condition: service_healthy
+      ai-searxng:
+        condition: service_healthy
+      ai-ollama:
+        condition: service_healthy
+    networks:
+      - ai_network
+
+  ai-ollama:
+    image: ollama/ollama:latest
+    container_name: ai_ollama
+    restart: unless-stopped
+    environment:
+      OLLAMA_KEEP_ALIVE: "-1"
+    ports:
+      - "127.0.0.1:11434:11434"
+    volumes:
+      - ai_ollama_data:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - ai_network
+
+  ai-postgres:
+    image: postgres:16-alpine
+    container_name: ai_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-ai_db}
+      POSTGRES_USER: ${POSTGRES_USER:-ai_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ai_password}
+    ports:
+      - "127.0.0.1:24781:5432"
+    volumes:
+      - ai_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-ai_user} -d ${POSTGRES_DB:-ai_db}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - ai_network
+
+  ai-qdrant:
+    image: qdrant/qdrant:latest
+    container_name: ai_qdrant
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:27519:6333"
+      - "127.0.0.1:29413:6334"
+    volumes:
+      - ai_qdrant_data:/qdrant/storage
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/localhost/6333' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - ai_network
+
+  ai-redis:
+    image: redis:7-alpine
+    container_name: ai_redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    ports:
+      - "127.0.0.1:31942:6379"
+    volumes:
+      - ai_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks:
+      - ai_network
+
+  ai-searxng:
+    image: searxng/searxng:latest
+    container_name: ai_searxng
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:28640:8080"
+    volumes:
+      - ./infra/searxng:/etc/searxng:rw
+    environment:
+      SEARXNG_BASE_URL: "http://localhost:28640/"
+      SEARXNG_SECRET: "${SEARXNG_SECRET:-flux-searxng-dev-secret-change-in-prod}"
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:8080/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    networks:
+      - ai_network
+
+volumes:
+  ai_postgres_data:
+  ai_qdrant_data:
+  ai_redis_data:
+  ai_ollama_data:
+
+networks:
+  ai_network:
+    driver: bridge
