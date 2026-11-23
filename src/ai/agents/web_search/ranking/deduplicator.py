@@ -33,8 +33,7 @@ def canonicalize_url(raw_url: str) -> str:
     kept_params = [
         (k, v)
         for k, v in parse_qsl(parsed.query, keep_blank_values=False)
-        if k.lower() not in _TRACKING_PARAMS
-        and not k.lower().startswith(_TRACKING_PARAM_PREFIXES)
+        if k.lower() not in _TRACKING_PARAMS and not k.lower().startswith(_TRACKING_PARAM_PREFIXES)
     ]
     kept_params.sort()
     query = urlencode(kept_params)
@@ -76,18 +75,14 @@ def _merge_hits(primary: SearchHit, incoming: SearchHit) -> SearchHit:
         incoming.authors if len(incoming.authors) > len(primary.authors) else primary.authors
     )
     better_category = (
-        "scholar"
-        if (primary.category == "scholar" or incoming.category == "scholar")
-        else "web"
+        "scholar" if (primary.category == "scholar" or incoming.category == "scholar") else "web"
     )
     better_url = (
         incoming.url
         if primary.category == "web" and incoming.category == "scholar"
         else primary.url
     )
-    better_title = (
-        incoming.title if len(incoming.title) > len(primary.title) else primary.title
-    )
+    better_title = incoming.title if len(incoming.title) > len(primary.title) else primary.title
     return SearchHit(
         provider=f"{primary.provider},{incoming.provider}"
         if incoming.provider not in primary.provider.split(",")

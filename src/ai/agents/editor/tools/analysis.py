@@ -154,7 +154,9 @@ async def handle_list_review_comments(
             target_id = cached.file_id
         else:
             files = await runtime.gateway.list_files(runtime.scope, include_content=False)
-            exact = [f for f in files if f.path.lstrip("/") == target_path or f.title == target_path]
+            exact = [
+                f for f in files if f.path.lstrip("/") == target_path or f.title == target_path
+            ]
             if exact:
                 target_id = exact[0].id
     target_id = target_id or runtime.scope.active_file_id or runtime.scope.page_id or None

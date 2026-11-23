@@ -65,7 +65,9 @@ def extract_preamble_summary(content: str, *, max_excerpt_chars: int = 1500) -> 
         begin_document_line=begin_doc_line,
         packages=tuple(packages_seen.keys()),
         custom_macros=tuple(list(macros_seen.keys())[:40]),
-        raw_excerpt=excerpt if begin_doc_line is not None or document_class or packages_seen else "",
+        raw_excerpt=excerpt
+        if begin_doc_line is not None or document_class or packages_seen
+        else "",
     )
 
 

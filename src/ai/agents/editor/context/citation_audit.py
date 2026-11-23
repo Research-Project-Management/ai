@@ -15,9 +15,7 @@ from ai.agents.editor.context.latex_scanner import (
 _BEGIN_DOC_RE = re.compile(r"\\begin\{document\}")
 _BEGIN_ENV_RE = re.compile(r"\\begin\{([^{}\s]+)\}")
 _END_ENV_RE = re.compile(r"\\end\{([^{}\s]+)\}")
-_SECTION_RE = re.compile(
-    r"\\(?:part|chapter|section|subsection|subsubsection)\*?\{([^}]*)\}"
-)
+_SECTION_RE = re.compile(r"\\(?:part|chapter|section|subsection|subsubsection)\*?\{([^}]*)\}")
 _ANY_CITE_OR_FOOTNOTE_RE = re.compile(
     r"\\(?:[a-zA-Z]*cite[a-zA-Z]*|footnote)\*?(?:\[[^\]]*\])*\{[^}]+\}"
 )
@@ -154,9 +152,7 @@ def audit_citation_gaps(
     undefined_keys: tuple[str, ...] = ()
     unused_bib_keys: tuple[str, ...] = ()
     if known_bib_keys:
-        undefined_keys = tuple(
-            sorted(k for k in used_keys_ordered if k.lower() not in known_lower)
-        )
+        undefined_keys = tuple(sorted(k for k in used_keys_ordered if k.lower() not in known_lower))
         unused_bib_keys = tuple(
             sorted(k for k in known_bib_keys if k.lower() not in used_lower)[:40]
         )
@@ -223,7 +219,9 @@ def audit_citation_gaps(
             reason = ""
             if _LITERATURE_CUE_RE.search(clean_sent):
                 reason = "References prior literature without a \\cite{...}."
-            elif _COMPARATIVE_CUE_RE.search(clean_sent) and not _SELF_REFERENTIAL_RE.search(clean_sent):
+            elif _COMPARATIVE_CUE_RE.search(clean_sent) and not _SELF_REFERENTIAL_RE.search(
+                clean_sent
+            ):
                 reason = "Empirical or comparative claim without a \\cite{...}."
 
             if reason:

@@ -70,7 +70,11 @@ def _authority_bonus(hit: SearchHit) -> float:
     if hit.category == "scholar" or hit.doi or hit.arxiv_id:
         bonus += 0.12
     host = (urlparse(hit.url).hostname or "").lower()
-    if host.endswith((".edu", ".gov")) or ".ac." in host or any(d in host for d in _HIGH_TRUST_DOMAINS):
+    if (
+        host.endswith((".edu", ".gov"))
+        or ".ac." in host
+        or any(d in host for d in _HIGH_TRUST_DOMAINS)
+    ):
         bonus += 0.08
     if hit.published_year is not None and hit.published_year >= 2022:
         bonus += 0.05
@@ -247,7 +251,10 @@ def curate_evidence_batch(
             open_access_pdf_url=res.open_access_pdf_url,
             score=0.9,
         )
-        score = max(0.5 if url_key in seed_keys or res.stage_resolved == "client_supplied" else 0.0, score_search_hit(query, synthetic))
+        score = max(
+            0.5 if url_key in seed_keys or res.stage_resolved == "client_supplied" else 0.0,
+            score_search_hit(query, synthetic),
+        )
         candidates.append((synthetic, score, True))
 
     filtered = [

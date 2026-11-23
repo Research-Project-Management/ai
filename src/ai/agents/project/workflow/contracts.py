@@ -18,4 +18,3 @@ class ProjectAgentConfig(BaseModel):
     timeout_seconds: float = Field(default=90.0, gt=0.0, le=300.0)
     tool_timeout_seconds: float = Field(default=15.0, gt=0.0, le=120.0)
     hitl_policy: ProjectHitlPolicy = "destructive"
-

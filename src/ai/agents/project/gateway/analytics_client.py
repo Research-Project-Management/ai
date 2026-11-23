@@ -18,9 +18,7 @@ class AnalyticsClient:
     def __init__(self, transport: ProjectHttpTransport) -> None:
         self._transport = transport
 
-    async def get_project_analytics(
-        self, scope: ProjectScope, project_id: str
-    ) -> ProjectAnalytics:
+    async def get_project_analytics(self, scope: ProjectScope, project_id: str) -> ProjectAnalytics:
         del scope
         raw = await self._transport.request(
             "GET",

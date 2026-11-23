@@ -222,3 +222,13 @@ class EditorGateway(Protocol):
         to_line: int,
         to_column: int,
     ) -> dict[str, Any]: ...
+
+    async def create_page(
+        self,
+        scope: EditorScope,
+        *,
+        title: str,
+        description: str | None = None,
+        content: str | None = None,
+        template_type: str | None = None,
+    ) -> dict[str, Any]: ...

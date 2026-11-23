@@ -138,13 +138,21 @@ def find_unique_anchor(
     norm_search = normalize_newlines(search_text)
 
     if not norm_content:
-        return None, "exact", (
-            f"Target file '{file_path}' is empty or not loaded. Read the file first with `read_file`."
+        return (
+            None,
+            "exact",
+            (
+                f"Target file '{file_path}' is empty or not loaded. Read the file first with `read_file`."
+            ),
         )
 
     if not norm_search.strip():
-        return None, "exact", (
-            "`search_text` is required to anchor this edit. Provide 2-5 verbatim lines from the file."
+        return (
+            None,
+            "exact",
+            (
+                "`search_text` is required to anchor this edit. Provide 2-5 verbatim lines from the file."
+            ),
         )
 
     for strategy in strategies:
@@ -154,17 +162,25 @@ def find_unique_anchor(
         if len(matches) > 1:
             lines = [_line_span(norm_content, s, e)[0] for s, e in matches[:5]]
             qualifier = "" if strategy.name == "exact" else f" ({strategy.name})"
-            return None, strategy.name, (
-                f"`search_text` matched {len(matches)} places in '{file_path}' "
-                f"(lines {lines}){qualifier}. Include additional surrounding lines so the match is unique."
+            return (
+                None,
+                strategy.name,
+                (
+                    f"`search_text` matched {len(matches)} places in '{file_path}' "
+                    f"(lines {lines}){qualifier}. Include additional surrounding lines so the match is unique."
+                ),
             )
 
     prefix_hint = ""
     if _LINE_PREFIX_RE.search(norm_search):
         prefix_hint = " Remove any 'L###: ' line-number prefixes from `search_text`."
-    return None, "exact", (
-        f"`search_text` was not found verbatim in '{file_path}'.{prefix_hint} "
-        "Call `read_file` to inspect exact lines before retrying."
+    return (
+        None,
+        "exact",
+        (
+            f"`search_text` was not found verbatim in '{file_path}'.{prefix_hint} "
+            "Call `read_file` to inspect exact lines before retrying."
+        ),
     )
 
 
@@ -187,9 +203,13 @@ def _resolve_preamble_patch(
         )
     match = _BEGIN_DOCUMENT_RE.search(norm_content)
     if not match:
-        return None, norm_content, (
-            f"`\\begin{{document}}` was not found in '{file_path}'. "
-            "Use `replace` on `main.tex` or the file defining the preamble."
+        return (
+            None,
+            norm_content,
+            (
+                f"`\\begin{{document}}` was not found in '{file_path}'. "
+                "Use `replace` on `main.tex` or the file defining the preamble."
+            ),
         )
     preamble_slice = norm_content[: match.start()]
     if clean_addition in preamble_slice:
@@ -243,8 +263,12 @@ def resolve_patch(
     pid = patch_id.strip() or f"patch-{uuid.uuid4().hex[:10]}"
 
     if not norm_content:
-        return None, norm_content, (
-            f"Target file '{file_path}' is empty or not loaded. Read the file first with `read_file`."
+        return (
+            None,
+            norm_content,
+            (
+                f"Target file '{file_path}' is empty or not loaded. Read the file first with `read_file`."
+            ),
         )
 
     if kind == "insert_preamble":

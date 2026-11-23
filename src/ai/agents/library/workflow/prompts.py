@@ -34,7 +34,7 @@ def build_planner_prompt(
         "first in an earlier step so the user sees accurate titles during confirmation.\n"
         "3. Never invent UUIDs, counts, titles, DOIs, or BibTeX entries.\n"
         "4. Preserve the user's language in your reasoning notes and final answer.\n"
-        '5. Once you have sufficient tool observations (or cannot proceed further), return '
+        "5. Once you have sufficient tool observations (or cannot proceed further), return "
         '"action": "respond" with "answer": "" so the final response synthesizer streams '
         "the complete answer to the user.\n\n"
         f"Current step: {step}/{max_steps}."

@@ -34,7 +34,9 @@ class LibraryWriter(LibraryClientBase):
         target_field = field_by_source[source]
         target_value = (url if source == "url" and url else identifier or url or "").strip()
         if not target_value:
-            raise LibraryGatewayError(400, f"add_paper requires a non-empty value for source={source}")
+            raise LibraryGatewayError(
+                400, f"add_paper requires a non-empty value for source={source}"
+            )
 
         body: dict[str, Any] = {"source": source, target_field: target_value}
         if collection_id and collection_id.strip():

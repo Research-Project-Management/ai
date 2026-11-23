@@ -34,7 +34,9 @@ def _parse_query_transform(
 ) -> QueryTransformResult:
     payload = parse_json_object(raw_text)
     if payload is None:
-        return QueryTransformResult(standalone_query=fallback_query, search_queries=(fallback_query,))
+        return QueryTransformResult(
+            standalone_query=fallback_query, search_queries=(fallback_query,)
+        )
 
     standalone = str(payload.get("standalone_query") or fallback_query).strip() or fallback_query
     raw_queries = payload.get("search_queries")

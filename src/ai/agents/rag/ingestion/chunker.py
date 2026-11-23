@@ -100,7 +100,12 @@ def _split_blocks(
         idx += 1
         while idx < total:
             nxt = lines[idx].strip()
-            if not nxt or _HEADING_RE.match(nxt) or _FENCE_START_RE.match(nxt) or nxt.startswith("|"):
+            if (
+                not nxt
+                or _HEADING_RE.match(nxt)
+                or _FENCE_START_RE.match(nxt)
+                or nxt.startswith("|")
+            ):
                 break
             prose_lines.append(lines[idx])
             idx += 1
@@ -242,7 +247,10 @@ class MarkdownStructureChunker:
                         raw_chunks.append((block.page_number, block.section, part))
                     continue
 
-            if block.kind in {"prose", "fence"} and self.count_tokens(block.text) > self._chunk_size:
+            if (
+                block.kind in {"prose", "fence"}
+                and self.count_tokens(block.text) > self._chunk_size
+            ):
                 flush()
                 if block.kind == "fence":
                     raw_chunks.append((block.page_number, block.section, block.text))
@@ -274,7 +282,9 @@ class MarkdownStructureChunker:
                 section=section,
                 body=body,
             )
-            chunk_meta = {"section": section, "raw_content": body} if section else {"raw_content": body}
+            chunk_meta = (
+                {"section": section, "raw_content": body} if section else {"raw_content": body}
+            )
             results.append(
                 KnowledgeChunkInput(
                     chunk_index=idx,

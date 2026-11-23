@@ -25,7 +25,6 @@ from ai.agents.project.tools.contracts import (
     ProjectToolRegistry,
     ProjectToolResult,
     ProjectToolRuntime,
-    ProjectToolSpec,
 )
 from ai.agents.project.workflow.contracts import (
     ProjectAgentConfig,
@@ -41,25 +40,10 @@ from ai.shared.llm.factory import ChatRunnable
 from ai.shared.llm.output import extract_text, strip_reasoning
 from ai.shared.workflow.events import LangGraphToolEvents, ToolEventPublisher
 from ai.shared.workflow.execute import run_tool_batch
-from ai.shared.workflow.gate import run_policy_gate
+from ai.shared.workflow.gate import build_confirmation_payload, run_policy_gate
 from ai.shared.workflow.plan import run_plan_step
 
 logger = logging.getLogger(__name__)
-
-
-def _build_confirmation_payload(
-    *,
-    interrupt_id: str,
-    spec: ProjectToolSpec,
-    validated_args: dict[str, Any],
-) -> dict[str, Any]:
-    return {
-        "id": interrupt_id,
-        "tool": spec.name,
-        "description": spec.format_confirmation(validated_args),
-        "args": validated_args,
-        "allowed_decisions": ["approve", "reject"],
-    }
 
 
 def _restore_models[T: BaseModel](raw_list: Any, cls: type[T]) -> list[T]:
@@ -71,11 +55,7 @@ def _restore_models[T: BaseModel](raw_list: Any, cls: type[T]) -> list[T]:
 def _restore_model_map[T: BaseModel](raw_map: Any, cls: type[T]) -> dict[str, list[T]]:
     if not isinstance(raw_map, dict):
         return {}
-    return {
-        str(k): _restore_models(v, cls)
-        for k, v in raw_map.items()
-        if isinstance(v, list)
-    }
+    return {str(k): _restore_models(v, cls) for k, v in raw_map.items() if isinstance(v, list)}
 
 
 class ProjectWorkflowNodes:
@@ -222,7 +202,7 @@ class ProjectWorkflowNodes:
             policy=self._agent_config.hitl_policy,
             step=int(state.get("step", 1)),
             id_prefix="pj",
-            build_confirmation=lambda spec, iid, args: _build_confirmation_payload(
+            build_confirmation=lambda spec, iid, args: build_confirmation_payload(
                 interrupt_id=iid, spec=spec, validated_args=args
             ),
         )

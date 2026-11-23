@@ -28,7 +28,9 @@ def build_search_planner_prompt(
         else "- Choose `scholar` for peer-reviewed papers/DOIs/literature surveys, `web` for documentation/"
         "code/events/benchmarks, or `hybrid` when both academic papers and web resources help.\n"
     )
-    override_note = f"- Mode is pinned to `{mode_override}` by the caller.\n" if mode_override else ""
+    override_note = (
+        f"- Mode is pinned to `{mode_override}` by the caller.\n" if mode_override else ""
+    )
     return (
         "You are an external search planner for a scientific research assistant.\n"
         "Rules:\n"
@@ -97,12 +99,14 @@ def format_web_evidence_block(
     blocked_note = ""
     if blocked_sources:
         lines = [
-            f"- {b.url} (reason={b.reason}"
-            + (f", doi={b.doi}" if b.doi else "")
-            + ")"
+            f"- {b.url} (reason={b.reason}" + (f", doi={b.doi}" if b.doi else "") + ")"
             for b in blocked_sources
         ]
-        blocked_note = "Inaccessible / blocked URLs (do NOT cite content from these):\n" + "\n".join(lines) + "\n\n"
+        blocked_note = (
+            "Inaccessible / blocked URLs (do NOT cite content from these):\n"
+            + "\n".join(lines)
+            + "\n\n"
+        )
 
     evidence_text = "\n\n".join(sections)
     return f"External Sources:\n{evidence_text}\n\n{blocked_note}Question: {query}"

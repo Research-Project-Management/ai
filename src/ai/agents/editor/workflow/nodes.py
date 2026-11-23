@@ -25,7 +25,6 @@ from ai.agents.editor.tools.contracts import (
     EditorToolRegistry,
     EditorToolResult,
     EditorToolRuntime,
-    EditorToolSpec,
 )
 from ai.agents.editor.workflow.contracts import EditorAgentConfig
 from ai.agents.editor.workflow.events import (
@@ -42,25 +41,10 @@ from ai.shared.contracts.run_control import RunUsage
 from ai.shared.llm.factory import ChatRunnable
 from ai.shared.llm.output import extract_text, strip_reasoning
 from ai.shared.workflow.execute import run_tool_batch
-from ai.shared.workflow.gate import run_policy_gate
+from ai.shared.workflow.gate import build_confirmation_payload, run_policy_gate
 from ai.shared.workflow.plan import run_plan_step
 
 logger = logging.getLogger(__name__)
-
-
-def _build_confirmation_payload(
-    *,
-    interrupt_id: str,
-    spec: EditorToolSpec,
-    validated_args: dict[str, Any],
-) -> dict[str, Any]:
-    return {
-        "id": interrupt_id,
-        "tool": spec.name,
-        "description": spec.format_confirmation(validated_args),
-        "args": validated_args,
-        "allowed_decisions": ["approve", "reject"],
-    }
 
 
 def _restore_file_cache(raw_cache: dict[str, dict[str, Any]] | None) -> dict[str, CachedFile]:
@@ -199,12 +183,15 @@ class EditorWorkflowNodes:
                 active_file_id=active_file_id,
                 active_file_path=active_file_path,
             )
-            active_file_id, active_file_path, hydrated_override, fetched_from_backend = (
-                await self._fetch_fallback_active_file(
-                    scope,
-                    active_file_id=active_file_id,
-                    active_file_path=active_file_path,
-                )
+            (
+                active_file_id,
+                active_file_path,
+                hydrated_override,
+                fetched_from_backend,
+            ) = await self._fetch_fallback_active_file(
+                scope,
+                active_file_id=active_file_id,
+                active_file_path=active_file_path,
             )
 
         merged_ctx = {
@@ -279,7 +266,7 @@ class EditorWorkflowNodes:
             policy=self._agent_config.hitl_policy,
             step=int(state.get("step", 1)),
             id_prefix="ed",
-            build_confirmation=lambda spec, iid, args: _build_confirmation_payload(
+            build_confirmation=lambda spec, iid, args: build_confirmation_payload(
                 interrupt_id=iid, spec=spec, validated_args=args
             ),
         )
@@ -291,9 +278,7 @@ class EditorWorkflowNodes:
 
         async def preview_patch(result: EditorToolResult) -> None:
             if result.status == "ok" and result.patch is not None:
-                await self._events.emit_patch_preview(
-                    result.patch, len(runtime.patches), config
-                )
+                await self._events.emit_patch_preview(result.patch, len(runtime.patches), config)
 
         outcome = await run_tool_batch(
             approved=state.get("approved_calls") or [],

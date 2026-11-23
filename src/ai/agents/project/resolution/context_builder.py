@@ -36,9 +36,7 @@ def format_project_context(snapshot: ProjectContextSnapshot) -> str:
         lines.append("- Workflow Columns: " + "; ".join(state_items))
 
     if snapshot.members:
-        member_items = [
-            f"{m.name} ({m.role}, id={m.user_id})" for m in snapshot.members[:25]
-        ]
+        member_items = [f"{m.name} ({m.role}, id={m.user_id})" for m in snapshot.members[:25]]
         lines.append("- Project Members: " + "; ".join(member_items))
 
     if snapshot.labels:

@@ -28,7 +28,10 @@ def build_planner_prompt(
         '"answer": "<final markdown answer if responding directly with 0 edits, else empty>", '
         '"reasoning": "<brief>"}\n\n'
         "## LaTeX Rigor & Grounding Rules\n"
-        "1. Whenever the user asks to edit, rewrite, polish, fix, format, or insert LaTeX in their "
+        "1. When the user asks to create or initialize a new page/article/paper (e.g., 'khởi tạo bài viết', "
+        "'tạo page', 'create page'), call `create_page` with a clear `title` (and optional `description`/starter "
+        "`content`) — `create_page` works even when no `page_id` is currently open.\n"
+        "2. Whenever the user asks to edit, rewrite, polish, fix, format, or insert LaTeX in an existing "
         "page, propose verified diffs via `propose_edit` instead of only dumping raw text—unless "
         "no file content is accessible or only an explanation was requested.\n"
         "2. Before calling `propose_edit` on a non-active file (or when `Active File Content` is truncated "
@@ -56,7 +59,7 @@ def build_planner_prompt(
         "`sync_library_citations`) or a Track Changes suggestion (`create_review_suggestion`).\n"
         "7. If `propose_edit` returns an anchor or LaTeX syntax error, fix your arguments using the error "
         "message and retry.\n"
-        '8. Once ready to answer the user (patches verified, write done, or question answerable), return '
+        "8. Once ready to answer the user (patches verified, write done, or question answerable), return "
         '"action": "respond" with "answer": "" so the streaming synthesizer presents the response.\n\n'
         f"Current step: {step}/{max_steps}."
     )
@@ -122,9 +125,7 @@ def format_observations_block(
         sections.append("\n\n".join(peer_lines))
 
     if patches:
-        patch_lines = [
-            "## Verified Patch Proposals Ready for UI"
-        ]
+        patch_lines = ["## Verified Patch Proposals Ready for UI"]
         for idx, p in enumerate(patches, start=1):
             span = f"L{p.get('from_line', '?')}-L{p.get('to_line', '?')}"
             warn_note = f" | warnings: {p.get('warnings')}" if p.get("warnings") else ""

@@ -40,16 +40,21 @@ def normalize_compile_errors(raw: Any, *, limit: int = 15) -> tuple[CompileError
                 items.append(CompileErrorItem(severity=default_severity, message=text[:400]))
             return
         if isinstance(entry, dict):
-            msg = str(entry.get("message") or entry.get("error") or entry.get("description") or "").strip()
+            msg = str(
+                entry.get("message") or entry.get("error") or entry.get("description") or ""
+            ).strip()
             if not msg:
                 return
             items.append(
                 CompileErrorItem(
                     line=_to_int_or_none(entry.get("line") or entry.get("startLine")),
                     file=str(entry.get("file") or entry.get("filePath") or "").strip().lstrip("/"),
-                    severity=str(entry.get("severity") or default_severity).strip().lower() or default_severity,
+                    severity=str(entry.get("severity") or default_severity).strip().lower()
+                    or default_severity,
                     message=msg[:400],
-                    context=str(entry.get("context") or entry.get("rawExcerpt") or "").strip()[:300],
+                    context=str(entry.get("context") or entry.get("rawExcerpt") or "").strip()[
+                        :300
+                    ],
                 )
             )
 
@@ -75,7 +80,9 @@ def normalize_compile_errors(raw: Any, *, limit: int = 15) -> tuple[CompileError
     return tuple(items)
 
 
-def _format_numbered_lines(lines: Sequence[str], *, start_line: int, max_chars: int) -> tuple[str, int]:
+def _format_numbered_lines(
+    lines: Sequence[str], *, start_line: int, max_chars: int
+) -> tuple[str, int]:
     if not lines:
         return "", start_line - 1
     width = max(3, len(str(start_line + len(lines) - 1)))
@@ -121,9 +128,7 @@ def build_editor_context_snapshot(
     cursor_line = _to_int_or_none(ctx.get("cursor_line"))
     cursor_column = _to_int_or_none(ctx.get("cursor_column"))
     raw_user_sel = ctx.get("user_selection")
-    raw_selection = ctx.get("selection") or (
-        raw_user_sel if isinstance(raw_user_sel, str) else ""
-    )
+    raw_selection = ctx.get("selection") or (raw_user_sel if isinstance(raw_user_sel, str) else "")
     selection_text = _clean_text(raw_selection).strip("\n")
     sel_start = _to_int_or_none(ctx.get("selection_start_line"))
     sel_end = _to_int_or_none(ctx.get("selection_end_line"))
@@ -151,7 +156,12 @@ def build_editor_context_snapshot(
             )
             is_truncated = viewport_end < total_lines
         else:
-            focus_start = sel_start or cursor_line or (compile_errors[0].line if compile_errors else None) or 1
+            focus_start = (
+                sel_start
+                or cursor_line
+                or (compile_errors[0].line if compile_errors else None)
+                or 1
+            )
             focus_end = sel_end if (sel_end is not None and sel_end >= focus_start) else focus_start
             viewport_start = max(1, focus_start - viewport_radius_lines)
             window_end = min(total_lines, focus_end + viewport_radius_lines)
@@ -192,12 +202,18 @@ def format_context_for_prompt(snapshot: EditorContextSnapshot) -> str:
     meta_lines: list[str] = [
         f"- Active file: `{snapshot.active_file_path}`"
         + (f" (file_id={snapshot.active_file_id})" if snapshot.active_file_id else "")
-        + (f" — {snapshot.total_lines} lines" if snapshot.total_lines else " — (content not loaded)"),
+        + (
+            f" — {snapshot.total_lines} lines"
+            if snapshot.total_lines
+            else " — (content not loaded)"
+        ),
     ]
     if snapshot.page_id:
         meta_lines.append(f"- Active page_id: `{snapshot.page_id}`")
     if snapshot.cursor_line is not None:
-        col_part = f", column {snapshot.cursor_column}" if snapshot.cursor_column is not None else ""
+        col_part = (
+            f", column {snapshot.cursor_column}" if snapshot.cursor_column is not None else ""
+        )
         meta_lines.append(f"- Cursor position: line {snapshot.cursor_line}{col_part}")
     if snapshot.current_section:
         meta_lines.append(f"- Current section: `{snapshot.current_section}`")
@@ -215,7 +231,9 @@ def format_context_for_prompt(snapshot: EditorContextSnapshot) -> str:
     if snapshot.local_labels:
         meta_lines.append(f"- Local `\\label`s: {', '.join(snapshot.local_labels[:25])}")
     if snapshot.local_citations:
-        meta_lines.append(f"- Cited keys in active file: {', '.join(snapshot.local_citations[:25])}")
+        meta_lines.append(
+            f"- Cited keys in active file: {', '.join(snapshot.local_citations[:25])}"
+        )
 
     sections: list[str] = ["## Active Editor Context\n" + "\n".join(meta_lines)]
 
@@ -229,9 +247,7 @@ def format_context_for_prompt(snapshot: EditorContextSnapshot) -> str:
         if snapshot.selection_start_line is not None:
             end = snapshot.selection_end_line or snapshot.selection_start_line
             span = f" (L{snapshot.selection_start_line}-L{end})"
-        sections.append(
-            f"### User Selected Text{span}\n```latex\n{snapshot.selection_text}\n```"
-        )
+        sections.append(f"### User Selected Text{span}\n```latex\n{snapshot.selection_text}\n```")
 
     if snapshot.compile_errors:
         err_lines = []

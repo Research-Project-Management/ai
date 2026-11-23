@@ -18,21 +18,7 @@ from ai.orchestrator.state import RootState
 from ai.shared.contracts.run_control import RunUsage
 from ai.shared.llm.factory import ChatRunnable
 from ai.shared.workflow.graph import compile_tool_agent_graph
-from ai.shared.workflow.turn import latest_query, recent_tail
-
-
-def _extract_peer_findings(state: RootState) -> list[dict[str, Any]]:
-    outputs = state.get("agent_outputs") or ()
-    findings: list[dict[str, Any]] = []
-    for out in outputs:
-        if out.agent == "project_agent" or out.status != "ok":
-            continue
-        snippet = out.content.strip()
-        if len(snippet) > 2500:
-            snippet = snippet[:2500] + "\n...[truncated]"
-        if snippet:
-            findings.append({"agent": out.agent, "content": snippet})
-    return findings
+from ai.shared.workflow.turn import extract_peer_findings, latest_query, recent_tail
 
 
 def build_project_subgraph(
@@ -92,7 +78,7 @@ def build_project_agent_spec(
         sub_input: ProjectState = {
             "query": query,
             "conversation_tail": recent_tail(list(state.get("messages") or ())),
-            "peer_findings": _extract_peer_findings(state),
+            "peer_findings": extract_peer_findings(state, exclude_agent="project_agent"),
             "space_id": space_id,
             "project_id": project_id,
             "user_id": user_id,

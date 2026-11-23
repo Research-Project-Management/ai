@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import posixpath
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Literal
@@ -27,7 +28,10 @@ class CachedFile(BaseModel):
 
 
 def _normalize_path(path: str | None) -> str:
-    return (path or "").strip().lstrip("/")
+    clean = (path or "").strip().replace("\\", "/").lstrip("/")
+    while clean.startswith("./"):
+        clean = clean[2:]
+    return posixpath.normpath(clean) if clean else ""
 
 
 @dataclass
@@ -60,7 +64,10 @@ class EditorToolRuntime:
             if clean_path in self.file_cache:
                 return self.file_cache[clean_path]
             for key, cached in self.file_cache.items():
-                if _normalize_path(key) == clean_path or _normalize_path(cached.file_path) == clean_path:
+                if (
+                    _normalize_path(key) == clean_path
+                    or _normalize_path(cached.file_path) == clean_path
+                ):
                     return cached
             # Unique basename fallback (e.g. "intro.tex" -> "sections/intro.tex")
             basename = clean_path.rsplit("/", 1)[-1]

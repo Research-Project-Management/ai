@@ -32,9 +32,7 @@ class EntityMatchStrategy(Protocol):
 
     name: str
 
-    def match(
-        self, query: str, candidates: Sequence[CandidateItem]
-    ) -> list[CandidateItem]: ...
+    def match(self, query: str, candidates: Sequence[CandidateItem]) -> list[CandidateItem]: ...
 
 
 class ExactIdStrategy:
@@ -42,9 +40,7 @@ class ExactIdStrategy:
 
     name = "exact_id"
 
-    def match(
-        self, query: str, candidates: Sequence[CandidateItem]
-    ) -> list[CandidateItem]:
+    def match(self, query: str, candidates: Sequence[CandidateItem]) -> list[CandidateItem]:
         q = query.strip().lower()
         return [c for c in candidates if c.id.strip().lower() == q]
 
@@ -54,9 +50,7 @@ class ExactNameOrAliasStrategy:
 
     name = "exact_name"
 
-    def match(
-        self, query: str, candidates: Sequence[CandidateItem]
-    ) -> list[CandidateItem]:
+    def match(self, query: str, candidates: Sequence[CandidateItem]) -> list[CandidateItem]:
         q = query.strip().lower()
         hits: list[CandidateItem] = []
         for cand in candidates:
@@ -71,9 +65,7 @@ class SubstringPrefixStrategy:
 
     name = "fuzzy_match"
 
-    def match(
-        self, query: str, candidates: Sequence[CandidateItem]
-    ) -> list[CandidateItem]:
+    def match(self, query: str, candidates: Sequence[CandidateItem]) -> list[CandidateItem]:
         q = query.strip().lower()
         if len(q) < 2:
             return []
@@ -102,9 +94,7 @@ class TokenSubsetStrategy:
 
     name = "fuzzy_match"
 
-    def match(
-        self, query: str, candidates: Sequence[CandidateItem]
-    ) -> list[CandidateItem]:
+    def match(self, query: str, candidates: Sequence[CandidateItem]) -> list[CandidateItem]:
         q_tokens = _token_set(query)
         if not q_tokens:
             return []
@@ -171,9 +161,7 @@ def resolve_member(query: str, members: Sequence[ProjectMember]) -> ResolutionRe
             id=m.user_id,
             name=m.name,
             aliases=tuple(
-                tok
-                for tok in (m.email, m.email.split("@", 1)[0] if "@" in m.email else "")
-                if tok
+                tok for tok in (m.email, m.email.split("@", 1)[0] if "@" in m.email else "") if tok
             ),
         )
         for m in members
@@ -181,9 +169,7 @@ def resolve_member(query: str, members: Sequence[ProjectMember]) -> ResolutionRe
     return resolve_entity(query, candidates, entity_type="member")
 
 
-def resolve_workflow_state(
-    query: str, states: Sequence[WorkflowState]
-) -> ResolutionResult:
+def resolve_workflow_state(query: str, states: Sequence[WorkflowState]) -> ResolutionResult:
     """Resolve a Kanban column by `state.id`, column name, `group`, or common synonym."""
     candidates: list[CandidateItem] = []
     for st in states:

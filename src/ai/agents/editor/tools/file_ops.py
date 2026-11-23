@@ -121,9 +121,7 @@ def _slice_numbered_content(
     requested_end = end_line if end_line is not None else s_line + _MAX_READ_LINES_PER_CALL - 1
     e_line = min(total_lines, max(s_line, requested_end), s_line + _MAX_READ_LINES_PER_CALL - 1)
     width = max(3, len(str(total_lines)))
-    numbered = "\n".join(
-        f"L{idx:0{width}d}: {lines[idx - 1]}" for idx in range(s_line, e_line + 1)
-    )
+    numbered = "\n".join(f"L{idx:0{width}d}: {lines[idx - 1]}" for idx in range(s_line, e_line + 1))
     return {
         "file_id": entry.file_id,
         "file_path": entry.file_path,
@@ -147,11 +145,7 @@ async def handle_list_files(runtime: EditorToolRuntime, args: ListFilesArgs) -> 
                 "path": f.path,
                 "title": f.title,
                 "is_root": f.is_root,
-                **(
-                    {"line_count": len(f.content.splitlines())}
-                    if f.content is not None
-                    else {}
-                ),
+                **({"line_count": len(f.content.splitlines())} if f.content is not None else {}),
             }
         )
     return EditorToolResult(

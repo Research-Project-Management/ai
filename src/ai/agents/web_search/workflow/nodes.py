@@ -1,4 +1,6 @@
-"""Async LangGraph node callables for `web_search_agent`."""
+"""Async LangGraph Node Container (`WebSearchNodes`) for `web_search_agent`."""
+
+from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Sequence
 from typing import Any, cast
@@ -109,16 +111,76 @@ def _format_abstention_with_blocks(blocked_sources: Sequence[BlockedSourceReport
     )
 
 
-def build_web_search_nodes(
+def _build_fetch_requests(
     *,
-    llm: ChatRunnable,
-    search_registry: SearchProviderRegistry,
-    fetch_ladder: UrlFetchLadder,
-    agent_config: WebSearchAgentConfig,
-) -> dict[str, Callable[..., Awaitable[dict[str, Any]]]]:
-    """Assemble the 4 async nodes for the `web_search_agent` LangGraph subgraph."""
+    seed_urls: tuple[str, ...],
+    client_sources: tuple[Any, ...],
+    to_fetch_hits: Sequence[SearchHit],
+    allowed_domains: tuple[str, ...],
+    blocked_domains: tuple[str, ...],
+) -> list[FetchRequest]:
+    """Deduplicate fetch requests across seed URLs, caller-supplied sources, and search hits."""
+    fetch_requests: list[FetchRequest] = []
+    queued_keys: set[str] = set()
 
-    async def plan_search(state: WebSearchState, config: RunnableConfig) -> dict[str, Any]:
+    def _enqueue(url: str, *, identifiers_hint: Any = None) -> None:
+        canon_url = canonicalize_url(url) or url.strip()
+        derived = extract_academic_identifiers(url)
+        merged_ids = derived.merge(identifiers_hint) if identifiers_hint is not None else derived
+        cid = compute_canonical_id(url=url, doi=merged_ids.doi, arxiv_id=merged_ids.arxiv_id)
+        if cid in queued_keys or canon_url in queued_keys:
+            return
+        queued_keys.add(cid)
+        queued_keys.add(canon_url)
+        fetch_requests.append(
+            FetchRequest(
+                url=url,
+                identifiers=merged_ids,
+                client_sources=client_sources,
+                allowed_domains=allowed_domains,
+                blocked_domains=blocked_domains,
+            )
+        )
+
+    for url in seed_urls:
+        _enqueue(url)
+    for src in client_sources:
+        _enqueue(src.url)
+    for hit in to_fetch_hits:
+        ids_from_hit = extract_academic_identifiers(hit.url)
+        if hit.doi or hit.arxiv_id or hit.pmid:
+            ids_from_hit = ids_from_hit.merge(
+                ids_from_hit.model_copy(
+                    update={
+                        "doi": ids_from_hit.doi or hit.doi,
+                        "arxiv_id": ids_from_hit.arxiv_id or hit.arxiv_id,
+                        "pmid": ids_from_hit.pmid or hit.pmid,
+                    }
+                )
+            )
+        _enqueue(hit.url, identifiers_hint=ids_from_hit)
+
+    return fetch_requests
+
+
+class WebSearchNodes:
+    """Testable DI node suite wired for the `web_search_agent` subgraph."""
+
+    def __init__(
+        self,
+        *,
+        llm: ChatRunnable,
+        search_registry: SearchProviderRegistry,
+        fetch_ladder: UrlFetchLadder,
+        agent_config: WebSearchAgentConfig,
+    ) -> None:
+        self._llm = llm
+        self._search_registry = search_registry
+        self._fetch_ladder = fetch_ladder
+        self._cfg = agent_config
+
+    async def plan_search(self, state: WebSearchState, config: RunnableConfig) -> dict[str, Any]:
+        """Determine search strategy (`direct_url` / `scholar` / `web` / `hybrid`) and sub-queries."""
         query = str(state.get("query") or "").strip()
         round_index = int(state.get("round_index", 0)) + 1
         seed_urls = state.get("seed_urls") or []
@@ -138,12 +200,12 @@ def build_web_search_nodes(
         tail_block = "Recent context:\n" + "\n".join(tail) + "\n\n" if tail else ""
         sys_prompt = build_search_planner_prompt(
             round_index=round_index,
-            max_sub_queries=agent_config.max_sub_queries,
+            max_sub_queries=self._cfg.max_sub_queries,
             has_seed_urls=bool(seed_urls),
             prior_queries=prior_queries,
             mode_override=mode_override,
         )
-        response = await llm.ainvoke(
+        response = await self._llm.ainvoke(
             [
                 SystemMessage(content=sys_prompt),
                 HumanMessage(content=f"{tail_block}Current request: {query}"),
@@ -153,7 +215,7 @@ def build_web_search_nodes(
         parsed = _parse_search_plan(
             extract_text(response.content),
             fallback_query=query,
-            max_sub_queries=agent_config.max_sub_queries,
+            max_sub_queries=self._cfg.max_sub_queries,
             has_seed_urls=bool(seed_urls),
             mode_override=mode_override if round_index == 1 else None,
         )
@@ -167,8 +229,9 @@ def build_web_search_nodes(
         }
 
     async def execute_search_and_fetch(
-        state: WebSearchState, config: RunnableConfig
+        self, state: WebSearchState, config: RunnableConfig
     ) -> dict[str, Any]:
+        """Run multi-provider search, deduplicate candidates, fetch URLs, and rank evidence."""
         del config
         base_query = str(state.get("query") or "")
         standalone = str(state.get("standalone_query") or base_query).strip()
@@ -186,75 +249,39 @@ def build_web_search_nodes(
                 SearchQuery(
                     query=q,
                     category=category,
-                    max_results=agent_config.max_results_per_provider,
+                    max_results=self._cfg.max_results_per_provider,
                     allowed_domains=allowed_domains,
                     blocked_domains=blocked_domains,
                 )
                 for q in sub_queries
             ]
-            round_hits = await search_registry.search_many(
+            round_hits = await self._search_registry.search_many(
                 queries,
-                timeout_seconds=agent_config.search_timeout_seconds,
+                timeout_seconds=self._cfg.search_timeout_seconds,
             )
 
         all_hits = deduplicate_hits([*(state.get("raw_hits") or []), *round_hits])
         scored = [(hit, score_search_hit(standalone, hit)) for hit in all_hits]
         to_fetch_hits = select_urls_for_deep_fetch(
             scored,
-            max_deep_fetch=agent_config.max_deep_fetch_urls,
+            max_deep_fetch=self._cfg.max_deep_fetch_urls,
             seed_urls=seed_urls,
         )
-
-        # Build deduplicated fetch requests across explicit seed URLs, caller-supplied client URLs,
-        # and snippet-insufficient search candidates.
-        fetch_requests: list[FetchRequest] = []
-        queued_keys: set[str] = set()
-
-        def _enqueue(url: str, *, identifiers_hint: Any = None) -> None:
-            canon_url = canonicalize_url(url) or url.strip()
-            derived = extract_academic_identifiers(url)
-            merged_ids = derived.merge(identifiers_hint) if identifiers_hint is not None else derived
-            cid = compute_canonical_id(url=url, doi=merged_ids.doi, arxiv_id=merged_ids.arxiv_id)
-            if cid in queued_keys or canon_url in queued_keys:
-                return
-            queued_keys.add(cid)
-            queued_keys.add(canon_url)
-            fetch_requests.append(
-                FetchRequest(
-                    url=url,
-                    identifiers=merged_ids,
-                    client_sources=client_sources,
-                    allowed_domains=allowed_domains,
-                    blocked_domains=blocked_domains,
-                )
-            )
-
-        for url in seed_urls:
-            _enqueue(url)
-        for src in client_sources:
-            _enqueue(src.url)
-        for hit in to_fetch_hits:
-            ids_from_hit = extract_academic_identifiers(hit.url)
-            if hit.doi or hit.arxiv_id or hit.pmid:
-                ids_from_hit = ids_from_hit.merge(
-                    ids_from_hit.model_copy(
-                        update={
-                            "doi": ids_from_hit.doi or hit.doi,
-                            "arxiv_id": ids_from_hit.arxiv_id or hit.arxiv_id,
-                            "pmid": ids_from_hit.pmid or hit.pmid,
-                        }
-                    )
-                )
-            _enqueue(hit.url, identifiers_hint=ids_from_hit)
-
-        fetch_results = await fetch_ladder.fetch_many(fetch_requests)
+        fetch_requests = _build_fetch_requests(
+            seed_urls=seed_urls,
+            client_sources=client_sources,
+            to_fetch_hits=to_fetch_hits,
+            allowed_domains=allowed_domains,
+            blocked_domains=blocked_domains,
+        )
+        fetch_results = await self._fetch_ladder.fetch_many(fetch_requests)
         batch = curate_evidence_batch(
             query=standalone,
             hits=all_hits,
             fetch_results=fetch_results,
             seed_urls=seed_urls,
-            top_k=agent_config.top_k_evidence,
-            min_score=agent_config.min_relevance_score,
+            top_k=self._cfg.top_k_evidence,
+            min_score=self._cfg.min_relevance_score,
         )
         return {
             "raw_hits": all_hits,
@@ -263,20 +290,24 @@ def build_web_search_nodes(
             "blocked_sources": list(batch.blocked_sources),
         }
 
-    async def evaluate_coverage(state: WebSearchState) -> dict[str, Any]:
+    async def evaluate_coverage(self, state: WebSearchState) -> dict[str, Any]:
+        """Decide whether curated evidence satisfies coverage threshold or warrants retry."""
         ranked = state.get("ranked_desc") or []
-        if len(ranked) >= agent_config.min_evidence_count:
+        if len(ranked) >= self._cfg.min_evidence_count:
             return {"abstain": False}
 
         blocked = state.get("blocked_sources") or []
         if blocked and all(item.reason in TERMINAL_SECURITY_BLOCKS for item in blocked):
             return {"abstain": True}
 
-        if int(state.get("round_index", 1)) < agent_config.max_rounds:
+        if int(state.get("round_index", 1)) < self._cfg.max_rounds:
             return {"abstain": False}
         return {"abstain": True}
 
-    async def synthesize_answer(state: WebSearchState, config: RunnableConfig) -> dict[str, Any]:
+    async def synthesize_answer(
+        self, state: WebSearchState, config: RunnableConfig
+    ) -> dict[str, Any]:
+        """Synthesize cited answer from ranked evidence or return transparent abstention."""
         ranked_desc = state.get("ranked_desc") or []
         repacked = state.get("repacked_evidence") or []
         blocked = state.get("blocked_sources") or []
@@ -299,7 +330,7 @@ def build_web_search_nodes(
             ranked_desc=ranked_desc,
             blocked_sources=blocked,
         )
-        response = await llm.ainvoke(
+        response = await self._llm.ainvoke(
             [
                 SystemMessage(content=build_web_synthesis_prompt()),
                 HumanMessage(content=user_prompt),
@@ -319,9 +350,27 @@ def build_web_search_nodes(
             "usage": prior_usage.merge(RunUsage.from_message(response)),
         }
 
+
+def build_web_search_nodes(
+    *,
+    llm: ChatRunnable,
+    search_registry: SearchProviderRegistry,
+    fetch_ladder: UrlFetchLadder,
+    agent_config: WebSearchAgentConfig,
+) -> dict[str, Callable[..., Awaitable[dict[str, Any]]]]:
+    """Assemble the 4 async nodes for the `web_search_agent` LangGraph subgraph."""
+    nodes = WebSearchNodes(
+        llm=llm,
+        search_registry=search_registry,
+        fetch_ladder=fetch_ladder,
+        agent_config=agent_config,
+    )
     return {
-        "plan_search": plan_search,
-        "execute_search_and_fetch": execute_search_and_fetch,
-        "evaluate_coverage": evaluate_coverage,
-        "synthesize_answer": synthesize_answer,
+        "plan_search": nodes.plan_search,
+        "execute_search_and_fetch": nodes.execute_search_and_fetch,
+        "evaluate_coverage": nodes.evaluate_coverage,
+        "synthesize_answer": nodes.synthesize_answer,
     }
+
+
+__all__ = ["WebSearchNodes", "build_web_search_nodes"]

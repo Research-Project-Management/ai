@@ -19,36 +19,7 @@ from ai.orchestrator.state import RootState
 from ai.shared.contracts.run_control import RunUsage
 from ai.shared.llm.factory import ChatRunnable
 from ai.shared.workflow.graph import compile_tool_agent_graph
-from ai.shared.workflow.turn import latest_query, recent_tail
-
-
-def _extract_peer_findings(state: RootState) -> list[dict[str, Any]]:
-    outputs = state.get("agent_outputs") or ()
-    findings: list[dict[str, Any]] = []
-    for out in outputs:
-        if out.agent == "editor_agent" or out.status != "ok":
-            continue
-        snippet = out.content.strip()
-        if len(snippet) > 2500:
-            snippet = snippet[:2500] + "\n...[truncated]"
-        cite_summaries = [
-            {
-                "source_id": c.source_id,
-                "title": c.title,
-                "url": c.url,
-                "page": c.page,
-            }
-            for c in out.citations[:10]
-        ]
-        if snippet or cite_summaries:
-            findings.append(
-                {
-                    "agent": out.agent,
-                    "content": snippet,
-                    **({"citations": cite_summaries} if cite_summaries else {}),
-                }
-            )
-    return findings
+from ai.shared.workflow.turn import extract_peer_findings, latest_query, recent_tail
 
 
 def build_editor_subgraph(
@@ -147,7 +118,9 @@ def build_editor_agent_spec(
         sub_input: EditorState = {
             "query": query,
             "conversation_tail": recent_tail(list(state.get("messages") or ())),
-            "peer_findings": _extract_peer_findings(state),
+            "peer_findings": extract_peer_findings(
+                state, exclude_agent="editor_agent", include_citations=True
+            ),
             "page_id": page_id,
             "space_id": space_id,
             "user_id": user_id,
@@ -184,12 +157,14 @@ def build_editor_agent_spec(
     return AgentSpec(
         name="editor_agent",
         description=(
-            "Reads multi-file LaTeX/.bib pages, understands cursor/selection/compile diagnostics, "
-            "explains mathematical or LaTeX sections, checks citations/labels/lint rules, and proposes "
-            "anchor-verified LaTeX diff patches for interactive CodeMirror review."
+            "Creates new LaTeX pages/articles (`create_page`) and reads multi-file LaTeX/.bib pages, "
+            "understands cursor/selection/compile diagnostics, explains mathematical or LaTeX sections, "
+            "checks citations/labels/lint rules, and proposes anchor-verified LaTeX diff patches for "
+            "interactive CodeMirror review."
         ),
         handler=_run_editor_agent,
         capabilities=(
+            "page_creation",
             "latex_editing",
             "latex_debugging",
             "page_navigation",

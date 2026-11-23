@@ -136,7 +136,9 @@ class ProjectsClient:
         entries = raw.get("projects", []) if isinstance(raw, dict) else raw
         if not isinstance(entries, list):
             return []
-        return [_parse_project(item) for item in entries if isinstance(item, dict) and item.get("id")]
+        return [
+            _parse_project(item) for item in entries if isinstance(item, dict) and item.get("id")
+        ]
 
     async def get_project(self, scope: ProjectScope, project_id: str) -> ProjectSummary:
         del scope
@@ -303,11 +305,7 @@ class ProjectsClient:
             "GET",
             f"/api/v1/projects/{encode_seg(project_id)}/states",
         )
-        entries = (
-            raw.get("states") or raw.get("columns") or []
-            if isinstance(raw, dict)
-            else raw
-        )
+        entries = raw.get("states") or raw.get("columns") or [] if isinstance(raw, dict) else raw
         if not isinstance(entries, list):
             return []
         states = [_parse_workflow_state(s) for s in entries if isinstance(s, dict) and s.get("id")]

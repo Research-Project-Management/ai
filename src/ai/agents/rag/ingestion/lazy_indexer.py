@@ -126,9 +126,7 @@ class HttpFileContentFetcher:
         if raw_len:
             try:
                 if int(raw_len) > self._max_bytes:
-                    raise ValueError(
-                        f"File size {raw_len} exceeds max_bytes={self._max_bytes}"
-                    )
+                    raise ValueError(f"File size {raw_len} exceeds max_bytes={self._max_bytes}")
             except ValueError as exc:
                 if "max_bytes=" in str(exc):
                     raise

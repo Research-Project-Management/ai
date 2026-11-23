@@ -97,9 +97,7 @@ async def handle_update_project(
     )
 
 
-async def handle_add_member(
-    runtime: ProjectToolRuntime, args: AddMemberArgs
-) -> ProjectToolResult:
+async def handle_add_member(runtime: ProjectToolRuntime, args: AddMemberArgs) -> ProjectToolResult:
     pid, err = await runtime.resolve_project_id(args.project_id)
     if err or not pid:
         return ProjectToolResult(tool="add_project_member", status="error", error=err)

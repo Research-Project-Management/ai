@@ -80,7 +80,11 @@ def build_library_agent_spec(
 
         space_id = str(configurable.get("space_id") or context.get("space_id") or "").strip()
         user_id = str(context.get("user_id") or configurable.get("user_id") or "").strip()
-        raw_scope = str(context.get("scope_type") or configurable.get("scope_type") or "auto").strip().lower()
+        raw_scope = (
+            str(context.get("scope_type") or configurable.get("scope_type") or "auto")
+            .strip()
+            .lower()
+        )
         scope_type: Literal["auto", "personal", "project"] = cast(
             Literal["auto", "personal", "project"],
             raw_scope if raw_scope in _VALID_SCOPES else "auto",

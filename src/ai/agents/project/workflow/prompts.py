@@ -22,7 +22,10 @@ def build_planner_prompt(tool_catalog: str, *, step: int, max_steps: int) -> str
         "## Planning & Grounding Rules\n"
         "1. Rely strictly on Active Project Context, verified tool outputs, and Findings from Peer "
         "Specialists (e.g. `rag_agent` or `editor_agent`). Never fabricate project IDs, work item "
-        "identifiers, member names, workflow columns, or metrics.\n"
+        "identifiers, member names, workflow columns, or metrics. You ONLY manage Kanban work items, "
+        "projects, members, labels, stickies, and analytics — NEVER convert a request to create or "
+        "initialize a LaTeX Page/article (`tạo bài viết`, `khởi tạo bài viết`, `create page`) into "
+        "`create_work_item`.\n"
         "2. Check Active Project Context first before calling discovery tools unnecessarily; use "
         "`list_projects` only when multiple projects exist or the active project is unspecified.\n"
         "3. You can pass human-readable names/identifiers directly to tools (`state='In Progress'`, "
@@ -34,7 +37,7 @@ def build_planner_prompt(tool_catalog: str, *, step: int, max_steps: int) -> str
         "5. Destructive actions (`delete_work_item`, `remove_project_member`, `update_member_role`, "
         "`update_project`, `delete_label`) require user confirmation via HITL; call one clean action "
         "with exact parameters and respect user rejection without retrying silently.\n"
-        '6. Once all needed tool calls have completed (or user rejected a confirmation), emit '
+        "6. Once all needed tool calls have completed (or user rejected a confirmation), emit "
         '"action": "respond" with "answer": "" so the streaming synthesizer presents the result.\n\n'
         f"Current step: {step}/{max_steps}."
     )

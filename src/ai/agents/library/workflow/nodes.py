@@ -39,7 +39,12 @@ def _collect_known_titles(value: Any, out: dict[str, str]) -> None:
     if isinstance(value, dict):
         item_id = value.get("id")
         title = value.get("title") or value.get("name")
-        if isinstance(item_id, str) and item_id.strip() and isinstance(title, str) and title.strip():
+        if (
+            isinstance(item_id, str)
+            and item_id.strip()
+            and isinstance(title, str)
+            and title.strip()
+        ):
             out.setdefault(item_id.strip(), title.strip())
         for sub in value.values():
             _collect_known_titles(sub, out)
@@ -67,9 +72,7 @@ class LibraryWorkflowNodes:
         self._events: ToolEventPublisher = event_publisher or LangGraphToolEvents("library_agent")
         self._catalog_text = tool_registry.format_catalog()
 
-    async def plan_and_act(
-        self, state: LibraryState, config: RunnableConfig
-    ) -> dict[str, Any]:
+    async def plan_and_act(self, state: LibraryState, config: RunnableConfig) -> dict[str, Any]:
         query = str(state.get("query") or "")
         next_step = int(state.get("step", 0)) + 1
         tail = state.get("conversation_tail") or []
@@ -93,9 +96,7 @@ class LibraryWorkflowNodes:
             max_calls=4,
         )
 
-    async def policy_gate(
-        self, state: LibraryState, config: RunnableConfig
-    ) -> dict[str, Any]:
+    async def policy_gate(self, state: LibraryState, config: RunnableConfig) -> dict[str, Any]:
         del config
         observations = list(state.get("observations") or [])
         known_titles: dict[str, str] = {}

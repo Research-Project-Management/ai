@@ -261,9 +261,7 @@ class ProjectsPort(Protocol):
         self, scope: ProjectScope, project_id: str
     ) -> list[WorkflowState]: ...
 
-    async def list_labels(
-        self, scope: ProjectScope, project_id: str
-    ) -> list[ProjectLabel]: ...
+    async def list_labels(self, scope: ProjectScope, project_id: str) -> list[ProjectLabel]: ...
 
     async def create_label(
         self,
@@ -315,9 +313,7 @@ class WorkItemsPort(Protocol):
         relation: Literal["assigned", "created", "subscribed", "all"] = "assigned",
     ) -> list[WorkItemSummary]: ...
 
-    async def get_work_item(
-        self, scope: ProjectScope, work_item_id: str
-    ) -> WorkItemSummary: ...
+    async def get_work_item(self, scope: ProjectScope, work_item_id: str) -> WorkItemSummary: ...
 
     async def create_work_item(
         self,
@@ -354,9 +350,7 @@ class WorkItemsPort(Protocol):
         labels: Sequence[str] | None = None,
     ) -> WorkItemSummary: ...
 
-    async def delete_work_item(
-        self, scope: ProjectScope, work_item_id: str
-    ) -> dict[str, Any]: ...
+    async def delete_work_item(self, scope: ProjectScope, work_item_id: str) -> dict[str, Any]: ...
 
     async def archive_work_item(
         self, scope: ProjectScope, work_item_id: str

@@ -214,8 +214,12 @@ class SafeHttpFetchStage:
                 identifiers=request.identifiers,
             )
 
-        content_type = response.headers.get("content-type", "text/html").split(";", 1)[0].strip().lower()
-        if content_type and not any(content_type.startswith(p) for p in _ALLOWED_TEXT_MIME_PREFIXES):
+        content_type = (
+            response.headers.get("content-type", "text/html").split(";", 1)[0].strip().lower()
+        )
+        if content_type and not any(
+            content_type.startswith(p) for p in _ALLOWED_TEXT_MIME_PREFIXES
+        ):
             return FetchResult(
                 url=request.url,
                 final_url=current_url,

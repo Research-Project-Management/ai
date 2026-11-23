@@ -82,7 +82,9 @@ class SearchQuery(BaseModel):
     @model_validator(mode="after")
     def _validate_domain_exclusivity(self) -> Self:
         if self.allowed_domains and self.blocked_domains:
-            raise ValueError("Cannot specify both allowed_domains and blocked_domains simultaneously")
+            raise ValueError(
+                "Cannot specify both allowed_domains and blocked_domains simultaneously"
+            )
         return self
 
 
@@ -123,7 +125,9 @@ class SearchCache(Protocol):
 
     async def get_hits(self, key: str) -> tuple[SearchHit, ...] | None: ...
 
-    async def set_hits(self, key: str, hits: tuple[SearchHit, ...], *, ttl_seconds: int) -> None: ...
+    async def set_hits(
+        self, key: str, hits: tuple[SearchHit, ...], *, ttl_seconds: int
+    ) -> None: ...
 
     async def get_json(self, key: str) -> dict[str, Any] | None: ...
 

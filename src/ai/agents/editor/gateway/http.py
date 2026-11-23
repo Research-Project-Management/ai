@@ -63,6 +63,15 @@ class HttpEditorGateway:
             )
         return clean
 
+    def _require_space_id(self, scope: EditorScope) -> str:
+        clean = scope.space_id.strip()
+        if not clean:
+            raise EditorGatewayError(
+                400,
+                "Active `space_id` is required to create a new page",
+            )
+        return clean
+
     def _encoded_page_id(self, scope: EditorScope) -> str:
         return quote(self._require_page_id(scope), safe="")
 
@@ -317,6 +326,30 @@ class HttpEditorGateway:
         raw = await self._request(
             "POST",
             f"/api/v1/pages/pages/{encoded_id}/suggestions",
+            json_body=body,
+        )
+        return raw if isinstance(raw, dict) else {"result": raw}
+
+    async def create_page(
+        self,
+        scope: EditorScope,
+        *,
+        title: str,
+        description: str | None = None,
+        content: str | None = None,
+        template_type: str | None = None,
+    ) -> dict[str, Any]:
+        space_id = quote(self._require_space_id(scope), safe="")
+        body: dict[str, Any] = {"title": title.strip() or "Untitled Page"}
+        if description is not None and description.strip():
+            body["description"] = description.strip()
+        if content is not None and content.strip():
+            body["content"] = content
+        if template_type is not None and template_type.strip():
+            body["templateType"] = template_type.strip()
+        raw = await self._request(
+            "POST",
+            f"/api/v1/pages/spaces/{space_id}/pages",
             json_body=body,
         )
         return raw if isinstance(raw, dict) else {"result": raw}

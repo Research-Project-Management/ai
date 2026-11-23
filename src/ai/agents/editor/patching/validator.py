@@ -178,9 +178,7 @@ class ReferenceLabelVerificationRule:
         missing = sorted(r for r in (patched_refs - orig_refs) if r not in available)
         if not missing:
             return (), ()
-        warn = (
-            f"Reference label(s) not found in known page labels: {', '.join(missing[:5])}."
-        )
+        warn = f"Reference label(s) not found in known page labels: {', '.join(missing[:5])}."
         return (), (warn,)
 
 
@@ -195,9 +193,7 @@ DEFAULT_VALIDATION_RULES: tuple[LatexValidationRule, ...] = (
 
 
 def _prepare_clean_tex(latex: str) -> str:
-    return "\n".join(
-        mask_environments(latex, skipped_envs=VERBATIM_ENVS, strip_inline_verb=True)
-    )
+    return "\n".join(mask_environments(latex, skipped_envs=VERBATIM_ENVS, strip_inline_verb=True))
 
 
 def validate_patched_latex(

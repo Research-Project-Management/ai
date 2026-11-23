@@ -8,9 +8,7 @@ from urllib.parse import quote
 from ai.agents.library.gateway.contracts import LibraryScope
 from ai.shared.gateway.transport import BackendTransport
 
-_PERSONAL_SENTINELS: Final[frozenset[str]] = frozenset(
-    {"personal", "me", "all", "user", "flux"}
-)
+_PERSONAL_SENTINELS: Final[frozenset[str]] = frozenset({"personal", "me", "all", "user", "flux"})
 
 
 def _is_personal_scope(scope: LibraryScope) -> bool:
@@ -25,6 +23,15 @@ def _is_personal_scope(scope: LibraryScope) -> bool:
     return bool(user_id and space == user_id)
 
 
+def library_route(scope: LibraryScope, suffix: str) -> str:
+    """Build personal or space-scoped Library API path."""
+    clean_suffix = suffix.lstrip("/")
+    if _is_personal_scope(scope):
+        return f"/api/v1/library/{clean_suffix}"
+    encoded_space = quote(scope.space_id.strip(), safe="")
+    return f"/api/v1/spaces/{encoded_space}/library/{clean_suffix}"
+
+
 class LibraryClientBase:
     """Base for the read and write clients: owns the transport and personal/space routing."""
 
@@ -32,11 +39,7 @@ class LibraryClientBase:
         self._transport = transport
 
     def _route(self, scope: LibraryScope, suffix: str) -> str:
-        clean_suffix = suffix.lstrip("/")
-        if _is_personal_scope(scope):
-            return f"/api/v1/library/{clean_suffix}"
-        encoded_space = quote(scope.space_id.strip(), safe="")
-        return f"/api/v1/spaces/{encoded_space}/library/{clean_suffix}"
+        return library_route(scope, suffix)
 
     async def _request(
         self,

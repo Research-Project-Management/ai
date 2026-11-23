@@ -21,4 +21,3 @@ class EditorAgentConfig(BaseModel):
     viewport_radius_lines: int = Field(default=45, ge=10, le=200)
     max_file_chars: int = Field(default=40_000, ge=2_000, le=120_000)
     hitl_policy: EditorHitlPolicy = "all_writes"
-

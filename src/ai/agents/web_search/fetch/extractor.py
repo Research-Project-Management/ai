@@ -91,7 +91,10 @@ class _MarkdownHtmlParser(HTMLParser):
     @property
     def markdown(self) -> str:
         raw = "".join(self._chunks)
-        lines = [" ".join(line.split()) if not line.startswith("|") else line for line in raw.splitlines()]
+        lines = [
+            " ".join(line.split()) if not line.startswith("|") else line
+            for line in raw.splitlines()
+        ]
         compacted: list[str] = []
         blank_streak = 0
         for line in lines:

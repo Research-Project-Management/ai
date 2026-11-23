@@ -81,8 +81,7 @@ async def _handle_search_items(
     citations = tuple(
         c
         for item in (items if isinstance(items, list) else [])
-        if isinstance(item, dict)
-        and (c := _item_to_citation(item)) is not None
+        if isinstance(item, dict) and (c := _item_to_citation(item)) is not None
     )
     return ToolResult(tool="search_items", status="ok", data=data, citations=citations)
 

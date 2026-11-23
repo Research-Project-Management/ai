@@ -176,14 +176,12 @@ class WorkItemsClient:
             f"/api/v1/projects/{encode_seg(project_id)}/work-items",
             params=params,
         )
-        entries = (
-            raw.get("workItems") or raw.get("items") or []
-            if isinstance(raw, dict)
-            else raw
-        )
+        entries = raw.get("workItems") or raw.get("items") or [] if isinstance(raw, dict) else raw
         if not isinstance(entries, list):
             return []
-        return [_parse_work_item(item) for item in entries if isinstance(item, dict) and item.get("id")]
+        return [
+            _parse_work_item(item) for item in entries if isinstance(item, dict) and item.get("id")
+        ]
 
     async def get_my_work_items(
         self,
@@ -202,11 +200,7 @@ class WorkItemsClient:
         if not isinstance(raw, dict):
             return []
 
-        buckets = (
-            ("assigned", "created", "subscribed")
-            if relation == "all"
-            else (relation,)
-        )
+        buckets = ("assigned", "created", "subscribed") if relation == "all" else (relation,)
         seen_ids: set[str] = set()
         items: list[WorkItemSummary] = []
         for bucket in buckets:
@@ -359,9 +353,7 @@ class WorkItemsClient:
             raw = await self._transport.request("POST", f"{base}/unassign")
         return raw if isinstance(raw, dict) else {"newAssigneeId": assignee_id}
 
-    async def list_comments(
-        self, scope: ProjectScope, work_item_id: str
-    ) -> list[WorkItemComment]:
+    async def list_comments(self, scope: ProjectScope, work_item_id: str) -> list[WorkItemComment]:
         del scope
         raw = await self._transport.request(
             "GET",

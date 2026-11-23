@@ -13,6 +13,8 @@ from ai.agents.editor.tools.contracts import (
     EditorToolSpec,
 )
 from ai.agents.editor.tools.file_ops import resolve_and_cache_file
+from ai.shared.gateway.transport import encode_seg
+from ai.shared.resilience.mutations import MutationRecord, record_turn_mutation
 
 
 class AddBibtexEntriesArgs(BaseModel):
@@ -70,6 +72,27 @@ class CreateReviewSuggestionArgs(BaseModel):
         description="Text to insert immediately after `search_text` when `change_type='insert'`.",
     )
     rationale: str = Field(default="", description="Optional note explaining why.")
+
+
+class CreatePageArgs(BaseModel):
+    title: str = Field(
+        ...,
+        min_length=1,
+        max_length=200,
+        description="Title of the new LaTeX Page / academic article.",
+    )
+    description: str | None = Field(
+        default=None,
+        description="Optional short abstract or description of the new page.",
+    )
+    content: str | None = Field(
+        default=None,
+        description="Optional initial LaTeX source content; omit to scaffold starter LaTeX.",
+    )
+    template_type: str | None = Field(
+        default=None,
+        description="Optional backend template key (e.g. 'article', 'blank', 'example').",
+    )
 
 
 def _invalidate_bib_cache(runtime: EditorToolRuntime, target_bib_file: str) -> None:
@@ -213,9 +236,7 @@ async def handle_create_review_suggestion(
 
     start_idx, end_idx = span
     canonical_search = norm_content[start_idx:end_idx]
-    from_line, from_col, to_line, to_col = offset_span_to_line_col(
-        norm_content, start_idx, end_idx
-    )
+    from_line, from_col, to_line, to_col = offset_span_to_line_col(norm_content, start_idx, end_idx)
 
     if args.change_type == "insert":
         res = await runtime.gateway.create_review_suggestion(
@@ -245,6 +266,34 @@ async def handle_create_review_suggestion(
     return EditorToolResult(tool="create_review_suggestion", status="ok", data=res)
 
 
+async def handle_create_page(
+    runtime: EditorToolRuntime,
+    args: CreatePageArgs,
+) -> EditorToolResult:
+    created = await runtime.gateway.create_page(
+        runtime.scope,
+        title=args.title,
+        description=args.description,
+        content=args.content,
+        template_type=args.template_type,
+    )
+    page_id = str(
+        (created.get("id") or created.get("pageId") or "") if isinstance(created, dict) else ""
+    ).strip()
+    if page_id:
+        record_turn_mutation(
+            MutationRecord(
+                tool="create_page",
+                entity_type="page",
+                entity_id=page_id,
+                label=args.title,
+                undo_method="DELETE",
+                undo_path=f"/api/v1/pages/pages/{encode_seg(page_id)}",
+            )
+        )
+    return EditorToolResult(tool="create_page", status="ok", data=created)
+
+
 def _confirm_add_bibtex(args: dict[str, Any]) -> str:
     target_bib = str(args.get("target_bib_file") or "references.bib")
     return f"Add BibTeX citation entries to `{target_bib}`"
@@ -268,9 +317,26 @@ def _confirm_create_suggestion(args: dict[str, Any]) -> str:
     return f"Create Track Changes `{op}` suggestion in `{fpath}`"
 
 
+def _confirm_create_page(args: dict[str, Any]) -> str:
+    title = str(args.get("title") or "Untitled Page")
+    return f"Create new Page `{title}`"
+
+
 def build_write_tools() -> tuple[EditorToolSpec, ...]:
-    """Build Tier-2 HITL-gated bibliography & Track Changes write tools."""
+    """Build Tier-2 HITL-gated page, bibliography & Track Changes write tools."""
     return (
+        EditorToolSpec(
+            name="create_page",
+            description=(
+                "HITL-gated write: create/initialize a new LaTeX Page / academic article in the active "
+                "workspace/project (works even when no existing page is currently open)."
+            ),
+            args_schema=CreatePageArgs,
+            risk_tier="write",
+            idempotent=False,
+            handler=handle_create_page,
+            describe_confirmation=_confirm_create_page,
+        ),
         EditorToolSpec(
             name="add_bibtex_entries",
             description=(

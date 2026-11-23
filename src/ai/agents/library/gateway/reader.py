@@ -72,7 +72,9 @@ class LibraryReader(LibraryClientBase):
         return {
             "items": items,
             "returned_count": len(items),
-            "total_count": meta.get("totalCount", len(items)) if isinstance(meta, dict) else len(items),
+            "total_count": meta.get("totalCount", len(items))
+            if isinstance(meta, dict)
+            else len(items),
         }
 
     async def get_overview(self, scope: LibraryScope) -> LibraryOverview:
@@ -137,7 +139,9 @@ class LibraryReader(LibraryClientBase):
         if include_notes:
             notes_raw = resolved[idx]
             idx += 1
-            raw_note_list = notes_raw.get("notes", notes_raw) if isinstance(notes_raw, dict) else notes_raw
+            raw_note_list = (
+                notes_raw.get("notes", notes_raw) if isinstance(notes_raw, dict) else notes_raw
+            )
             if isinstance(raw_note_list, list):
                 for note in raw_note_list[:10]:
                     if isinstance(note, dict):
@@ -145,12 +149,16 @@ class LibraryReader(LibraryClientBase):
                             {
                                 "id": str(note.get("id") or ""),
                                 "title": str(note.get("title") or ""),
-                                "content": str(note.get("contentMd") or note.get("content") or "")[:600],
+                                "content": str(note.get("contentMd") or note.get("content") or "")[
+                                    :600
+                                ],
                             }
                         )
         if include_relations:
             rel_raw = resolved[idx]
-            raw_rel_list = rel_raw.get("relations", rel_raw) if isinstance(rel_raw, dict) else rel_raw
+            raw_rel_list = (
+                rel_raw.get("relations", rel_raw) if isinstance(rel_raw, dict) else rel_raw
+            )
             if isinstance(raw_rel_list, list):
                 for rel in raw_rel_list[:15]:
                     if isinstance(rel, dict):
@@ -162,9 +170,15 @@ class LibraryReader(LibraryClientBase):
                             }
                         )
 
-        abstract = str(item_raw.get("abstract") or item_raw.get("abstractNote") or "").strip()[:1500]
+        abstract = str(item_raw.get("abstract") or item_raw.get("abstractNote") or "").strip()[
+            :1500
+        ]
         attachments = item_raw.get("attachments")
-        attachment_count = len(attachments) if isinstance(attachments, list) else int(item_raw.get("attachmentCount") or 0)
+        attachment_count = (
+            len(attachments)
+            if isinstance(attachments, list)
+            else int(item_raw.get("attachmentCount") or 0)
+        )
         return ItemDetail(
             **summary.model_dump(),
             abstract=abstract,

@@ -98,7 +98,12 @@ async def handle_list_projects(
         priority=args.priority,
         is_archived=args.is_archived,
     )
-    if not args.search and not args.priority and args.is_archived is None and args.project_type == "all":
+    if (
+        not args.search
+        and not args.priority
+        and args.is_archived is None
+        and args.project_type == "all"
+    ):
         runtime.projects = list(projects)
     return ProjectToolResult(
         tool="list_projects",
@@ -166,9 +171,7 @@ async def handle_list_work_items(
         search=args.search,
         limit=args.limit,
     )
-    runtime.add_widget(
-        build_work_item_overview_widget(items, title="Project Work Items Overview")
-    )
+    runtime.add_widget(build_work_item_overview_widget(items, title="Project Work Items Overview"))
     return ProjectToolResult(
         tool="list_work_items",
         status="ok",

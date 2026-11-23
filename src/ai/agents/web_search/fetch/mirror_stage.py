@@ -51,7 +51,9 @@ class OpenAcademicMirrorStage:
             return await self._http_client.get(
                 url, params=params, headers=headers, timeout=self._timeout_seconds
             )
-        async with httpx.AsyncClient(timeout=self._timeout_seconds, follow_redirects=True) as client:
+        async with httpx.AsyncClient(
+            timeout=self._timeout_seconds, follow_redirects=True
+        ) as client:
             return await client.get(url, params=params, headers=headers)
 
     async def try_fetch(self, request: FetchRequest) -> FetchResult | None:
@@ -146,7 +148,9 @@ class OpenAcademicMirrorStage:
             return None
         rec = records[0]
         title = str(rec.get("title") or "").strip()
-        abstract = " ".join(_HTML_TAG_RE.sub(" ", str(rec.get("abstractText") or "")).split()).strip()
+        abstract = " ".join(
+            _HTML_TAG_RE.sub(" ", str(rec.get("abstractText") or "")).split()
+        ).strip()
         if not title or not abstract:
             return None
 
@@ -206,9 +210,7 @@ class OpenAcademicMirrorStage:
                         authors.append(disp)
         raw_oa = rec.get("open_access")
         oa_pdf = (
-            str(raw_oa.get("oa_url") or "").strip() or None
-            if isinstance(raw_oa, dict)
-            else None
+            str(raw_oa.get("oa_url") or "").strip() or None if isinstance(raw_oa, dict) else None
         )
         pub_year = rec.get("publication_year")
         year = int(pub_year) if isinstance(pub_year, int) else None

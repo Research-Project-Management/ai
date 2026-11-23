@@ -31,7 +31,9 @@ class MarkdownTextParser:
     """Parser for UTF-8 Markdown and plain-text documents."""
 
     supported_extensions: frozenset[str] = frozenset({".md", ".markdown", ".txt"})
-    supported_mime_types: frozenset[str] = frozenset({"text/markdown", "text/plain", "text/x-markdown"})
+    supported_mime_types: frozenset[str] = frozenset(
+        {"text/markdown", "text/plain", "text/x-markdown"}
+    )
 
     def parse_bytes(self, data: bytes, *, filename: str = "") -> ParsedDocument:
         text = data.decode("utf-8", errors="replace").strip()

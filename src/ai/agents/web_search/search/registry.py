@@ -67,7 +67,9 @@ class SearchProviderRegistry:
                 # Graceful fallback to any available providers when requested category has none
                 providers = self.by_category("hybrid")
             for provider in providers:
-                coros.append(self._run_provider_safe(provider, query, timeout_seconds=timeout_seconds))
+                coros.append(
+                    self._run_provider_safe(provider, query, timeout_seconds=timeout_seconds)
+                )
 
         if not coros:
             return ()
@@ -150,14 +152,10 @@ def build_default_search_registry(
         )
 
     if len(web_chain) == 1:
-        registry.register(
-            _wrap_cache(web_chain[0], cache, ttl_seconds=config.cache_ttl_seconds)
-        )
+        registry.register(_wrap_cache(web_chain[0], cache, ttl_seconds=config.cache_ttl_seconds))
     elif len(web_chain) > 1:
         composite = FallbackSearchProvider(name="web_default", category="web", providers=web_chain)
-        registry.register(
-            _wrap_cache(composite, cache, ttl_seconds=config.cache_ttl_seconds)
-        )
+        registry.register(_wrap_cache(composite, cache, ttl_seconds=config.cache_ttl_seconds))
 
     scholar_providers: tuple[SearchProvider, ...] = (
         OpenAlexSearchProvider(

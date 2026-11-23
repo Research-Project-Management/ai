@@ -73,10 +73,9 @@ def build_search_hit(
         if isinstance(raw_col, int)
         else (match["column"] if isinstance(match.get("column"), int) else None)
     )
-    resolved_path = (
-        file_path
-        or str(match.get("fileName") or match.get("filePath") or "document.tex").lstrip("/")
-    )
+    resolved_path = file_path or str(
+        match.get("fileName") or match.get("filePath") or "document.tex"
+    ).lstrip("/")
     preview = str(match.get("text") or match.get("preview") or match.get("snippet") or "")[:300]
     return EditorSearchHit(
         file_id=file_id or str(match.get("fileId") or ""),
@@ -98,9 +97,9 @@ def project_file_list(raw: Any, *, include_content: bool) -> list[EditorFileInfo
         if not isinstance(entry, dict):
             continue
         file_id = str(entry.get("id") or entry.get("docId") or "").strip()
-        raw_path = str(
-            entry.get("path") or entry.get("name") or entry.get("title") or ""
-        ).lstrip("/")
+        raw_path = str(entry.get("path") or entry.get("name") or entry.get("title") or "").lstrip(
+            "/"
+        )
         title = str(entry.get("title") or entry.get("name") or raw_path).strip()
         if not raw_path and title:
             raw_path = title
@@ -115,9 +114,7 @@ def project_file_list(raw: Any, *, include_content: bool) -> list[EditorFileInfo
                 id=file_id,
                 path=raw_path or "main.tex",
                 title=title or raw_path or "main.tex",
-                is_root=bool(
-                    entry.get("isRootDoc") or entry.get("isRoot") or entry.get("isMain")
-                ),
+                is_root=bool(entry.get("isRootDoc") or entry.get("isRoot") or entry.get("isMain")),
                 content=content,
             )
         )
@@ -277,9 +274,7 @@ def project_review_comments(raw: Any, *, limit: int = 80) -> list[EditorReviewCo
         comments.append(
             EditorReviewComment(
                 id=str(item.get("id") or ""),
-                status=str(
-                    item.get("status") or ("resolved" if item.get("resolved") else "open")
-                ),
+                status=str(item.get("status") or ("resolved" if item.get("resolved") else "open")),
                 author=extract_author_name(item),
                 content=str(item.get("content") or item.get("text") or "").strip()[:1000],
                 line=int(item["line"]) if isinstance(item.get("line"), int) else None,

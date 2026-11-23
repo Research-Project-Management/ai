@@ -6,6 +6,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+from ai.agents.project.gateway.contracts import WorkItemSummary
 from ai.agents.project.resolution.resolver import (
     resolve_label,
     resolve_member,
@@ -15,6 +16,13 @@ from ai.agents.project.tools.contracts import (
     ProjectToolResult,
     ProjectToolRuntime,
     ProjectToolSpec,
+)
+from ai.shared.gateway.transport import encode_seg
+from ai.shared.resilience.mutations import (
+    MutationRecord,
+    is_turn_journal_bound,
+    record_patch_undo,
+    record_turn_mutation,
 )
 
 
@@ -56,9 +64,7 @@ class UpdateWorkItemArgs(BaseModel):
     assignee: str | None = Field(
         default=None, description="Reassign by member name, email, or user ID."
     )
-    clear_assignee: bool = Field(
-        default=False, description="Set true to unassign the work item."
-    )
+    clear_assignee: bool = Field(default=False, description="Set true to unassign the work item.")
     priority: Literal["urgent", "high", "medium", "low", "none"] | None = None
     due_date: str | None = None
     start_date: str | None = None
@@ -149,11 +155,54 @@ async def handle_create_work_item(
         labels=raw_label_names,
         parent_work_item_id=args.parent_work_item_id,
     )
+    if created.id.strip():
+        record_turn_mutation(
+            MutationRecord(
+                tool="create_work_item",
+                entity_type="work_item",
+                entity_id=created.id,
+                label=created.title or args.title,
+                undo_method="DELETE",
+                undo_path=f"/api/v1/work-items/{encode_seg(created.id)}",
+            )
+        )
     return ProjectToolResult(
         tool="create_work_item",
         status="ok",
         data={"work_item": created.model_dump(mode="json")},
     )
+
+
+async def _safe_get_work_item(
+    runtime: ProjectToolRuntime, work_item_id: str
+) -> WorkItemSummary | None:
+    try:
+        return await runtime.gateway.work_items.get_work_item(runtime.scope, work_item_id)
+    except Exception:  # noqa: BLE001 - pre-update snapshot capture is best-effort
+        return None
+
+
+def _work_item_before_state(before: WorkItemSummary, args: UpdateWorkItemArgs) -> dict[str, Any]:
+    snap: dict[str, Any] = {}
+    if args.title is not None:
+        snap["title"] = before.title
+    if args.description is not None:
+        snap["description"] = before.description
+    if args.state is not None and before.column_id is not None:
+        snap["columnId"] = before.column_id
+    if args.assignee is not None or args.clear_assignee:
+        snap["assigneeId"] = before.assignee_id
+    if args.priority is not None:
+        snap["priority"] = before.priority
+    if args.due_date is not None:
+        snap["dueDate"] = before.due_date
+    if args.start_date is not None:
+        snap["startDate"] = before.start_date
+    if args.completed is not None:
+        snap["completed"] = before.completed
+    if args.labels is not None:
+        snap["labelIds"] = list(before.label_ids)
+    return snap
 
 
 async def handle_update_work_item(
@@ -163,6 +212,10 @@ async def handle_update_work_item(
     assignee_id: str | None = None
     label_ids: list[str] | None = None
     label_names: list[str] | None = None
+
+    before: WorkItemSummary | None = None
+    if is_turn_journal_bound():
+        before = await _safe_get_work_item(runtime, args.work_item_id)
 
     needs_project = bool(args.state or args.assignee or args.labels is not None)
     pid: str | None = None
@@ -209,6 +262,18 @@ async def handle_update_work_item(
         label_ids=label_ids if label_ids else None,
         labels=label_names if label_names else None,
     )
+    if before is not None and updated.id.strip():
+        before_state = _work_item_before_state(before, args)
+        if before_state:
+            record_patch_undo(
+                tool="update_work_item",
+                entity_type="work_item",
+                entity_id=updated.id,
+                label=updated.title or args.title or args.work_item_id,
+                path=f"/api/v1/work-items/{encode_seg(updated.id)}",
+                before_state=before_state,
+                method="PUT",
+            )
     return ProjectToolResult(
         tool="update_work_item",
         status="ok",
@@ -254,6 +319,17 @@ async def handle_add_comment(
         content=args.content,
         project_id=pid,
     )
+    if comment.id.strip():
+        record_turn_mutation(
+            MutationRecord(
+                tool="add_work_item_comment",
+                entity_type="comment",
+                entity_id=comment.id,
+                label=args.content[:40],
+                undo_method="DELETE",
+                undo_path=f"/api/v1/work-items/comments/{encode_seg(comment.id)}",
+            )
+        )
     return ProjectToolResult(
         tool="add_work_item_comment",
         status="ok",
@@ -275,6 +351,17 @@ async def handle_create_label(
         color=args.color,
         description=args.description,
     )
+    if label.id.strip():
+        record_turn_mutation(
+            MutationRecord(
+                tool="create_label",
+                entity_type="label",
+                entity_id=label.id,
+                label=label.name or args.name,
+                undo_method="DELETE",
+                undo_path=f"/api/v1/projects/{encode_seg(pid)}/labels/{encode_seg(label.id)}",
+            )
+        )
     cached = runtime.labels_by_project.get(pid)
     if cached is not None:
         cached.append(label)

@@ -79,9 +79,7 @@ def _describe_merge_confirmation(
     primary_id = str(validated_args.get("primary_item_id") or "")
     dup_ids = [str(i) for i in validated_args.get("duplicate_item_ids", ())]
     display_args["primary_title"] = known_titles.get(primary_id, "")
-    display_args["duplicates"] = [
-        {"id": i, "title": known_titles.get(i, "")} for i in dup_ids
-    ]
+    display_args["duplicates"] = [{"id": i, "title": known_titles.get(i, "")} for i in dup_ids]
     dup_noun = "duplicate item" if len(dup_ids) == 1 else "duplicate items"
     description = (
         f"Merge {len(dup_ids)} {dup_noun} [{', '.join(_label(i, known_titles) for i in dup_ids[:3])}] "

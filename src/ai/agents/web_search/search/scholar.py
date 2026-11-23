@@ -228,7 +228,9 @@ class ArxivSearchProvider:
 
         hits: list[SearchHit] = []
         for entry in root.findall("atom:entry", _ATOM_NS):
-            title = " ".join((entry.findtext("atom:title", default="", namespaces=_ATOM_NS)).split())
+            title = " ".join(
+                (entry.findtext("atom:title", default="", namespaces=_ATOM_NS)).split()
+            )
             url = (entry.findtext("atom:id", default="", namespaces=_ATOM_NS)).strip()
             if not title or not url:
                 continue
@@ -245,17 +247,30 @@ class ArxivSearchProvider:
             authors = tuple(
                 name
                 for a in entry.findall("atom:author", _ATOM_NS)[:10]
-                if (name := " ".join(a.findtext("atom:name", default="", namespaces=_ATOM_NS).split()))
+                if (
+                    name := " ".join(
+                        a.findtext("atom:name", default="", namespaces=_ATOM_NS).split()
+                    )
+                )
             )
-            published_raw = entry.findtext("atom:published", default="", namespaces=_ATOM_NS).strip()
-            year = int(published_raw[:4]) if len(published_raw) >= 4 and published_raw[:4].isdigit() else None
+            published_raw = entry.findtext(
+                "atom:published", default="", namespaces=_ATOM_NS
+            ).strip()
+            year = (
+                int(published_raw[:4])
+                if len(published_raw) >= 4 and published_raw[:4].isdigit()
+                else None
+            )
             doi = _normalize_doi(entry.findtext("arxiv:doi", default="", namespaces=_ATOM_NS))
 
             arxiv_match = _ARXIV_ID_FROM_URL_RE.search(url)
             arxiv_id = arxiv_match.group(1) if arxiv_match else None
             pdf_url: str | None = None
             for link in entry.findall("atom:link", _ATOM_NS):
-                if link.attrib.get("title") == "pdf" or link.attrib.get("type") == "application/pdf":
+                if (
+                    link.attrib.get("title") == "pdf"
+                    or link.attrib.get("type") == "application/pdf"
+                ):
                     pdf_url = link.attrib.get("href")
                     break
             if not pdf_url and arxiv_id:

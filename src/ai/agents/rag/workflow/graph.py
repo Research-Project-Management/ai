@@ -72,7 +72,9 @@ def build_rag_agent_spec(
 
         space_id = str(configurable.get("space_id") or context.get("space_id") or "").strip()
         if not space_id:
-            raise ValueError("rag_agent requires a non-empty space_id in RunnableConfig.configurable")
+            raise ValueError(
+                "rag_agent requires a non-empty space_id in RunnableConfig.configurable"
+            )
 
         raw_doc_ids = tuple(
             str(item).strip()

@@ -177,8 +177,7 @@ def audit_project_health(
         findings.extend(rule.evaluate(ctx))
 
     penalty = sum(
-        25 if f.severity == "high" else (12 if f.severity == "medium" else 5)
-        for f in findings
+        25 if f.severity == "high" else (12 if f.severity == "medium" else 5) for f in findings
     )
     score = max(0, 100 - penalty)
     status: Literal["healthy", "at_risk", "critical"] = (

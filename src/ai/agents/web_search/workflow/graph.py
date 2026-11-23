@@ -152,9 +152,9 @@ def build_web_search_agent_spec(
                 seen_urls.add(url)
                 seed_urls.append(url)
 
-        raw_mode = str(
-            context.get("search_mode") or configurable.get("search_mode") or ""
-        ).strip().lower()
+        raw_mode = (
+            str(context.get("search_mode") or configurable.get("search_mode") or "").strip().lower()
+        )
         mode_override: SearchMode | None = (
             cast(SearchMode, raw_mode) if raw_mode in _VALID_MODES else None
         )
@@ -172,9 +172,7 @@ def build_web_search_agent_spec(
             "round_index": 0,
         }
         result = await subgraph.ainvoke(sub_input, config=run_config)
-        blocked_items = [
-            item.model_dump() for item in (result.get("blocked_sources") or ())
-        ]
+        blocked_items = [item.model_dump() for item in (result.get("blocked_sources") or ())]
         raw_usage = result.get("usage")
         return AgentOutput(
             agent="web_search_agent",

@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
-from typing import Literal, Self
+from typing import Any, Literal, Self
+from urllib.parse import quote
 
 from pydantic import BaseModel, Field, model_validator
 
+from ai.agents.library.gateway.client_base import library_route
 from ai.agents.library.gateway.contracts import LibraryGateway, LibraryScope
 from ai.agents.library.tools.contracts import LibraryToolSpec, ToolResult
+from ai.shared.resilience.mutations import MutationRecord, record_turn_mutation
 
 
 class AddPaperArgs(BaseModel):
@@ -90,6 +93,19 @@ async def _handle_add_paper(
     return ToolResult(tool="add_paper", status="ok", data=data)
 
 
+def _extract_id(data: dict[str, Any], *nested_keys: str) -> str:
+    raw_id = data.get("id")
+    if isinstance(raw_id, str) and raw_id.strip():
+        return raw_id.strip()
+    for key in nested_keys:
+        nested = data.get(key)
+        if isinstance(nested, dict):
+            sub_id = nested.get("id")
+            if isinstance(sub_id, str) and sub_id.strip():
+                return sub_id.strip()
+    return ""
+
+
 async def _handle_manage_collection(
     gateway: LibraryGateway,
     scope: LibraryScope,
@@ -104,6 +120,46 @@ async def _handle_manage_collection(
         item_ids=args.item_ids,
         source_collection_id=args.source_collection_id,
     )
+    if args.action == "create":
+        col_id = _extract_id(data, "collection")
+        if col_id:
+            record_turn_mutation(
+                MutationRecord(
+                    tool="manage_collection",
+                    entity_type="collection",
+                    entity_id=col_id,
+                    label=args.name or col_id,
+                    undo_method="DELETE",
+                    undo_path=library_route(scope, f"collections/{quote(col_id, safe='')}"),
+                )
+            )
+    elif args.collection_id and args.collection_id.strip() and args.item_ids:
+        enc_col = quote(args.collection_id.strip(), safe="")
+        clean_items = [str(i).strip() for i in args.item_ids if str(i).strip()]
+        if clean_items and args.action == "assign":
+            record_turn_mutation(
+                MutationRecord(
+                    tool="manage_collection",
+                    entity_type="collection_items",
+                    entity_id=f"{args.collection_id.strip()}:assign",
+                    label=f"Assign {len(clean_items)} item(s)",
+                    undo_method="POST",
+                    undo_path=library_route(scope, f"collections/{enc_col}/items/bulk-detach"),
+                    undo_body={"itemIds": clean_items},
+                )
+            )
+        elif clean_items and args.action == "detach":
+            record_turn_mutation(
+                MutationRecord(
+                    tool="manage_collection",
+                    entity_type="collection_items",
+                    entity_id=f"{args.collection_id.strip()}:detach",
+                    label=f"Detach {len(clean_items)} item(s)",
+                    undo_method="POST",
+                    undo_path=library_route(scope, f"collections/{enc_col}/items"),
+                    undo_body={"itemIds": clean_items},
+                )
+            )
     return ToolResult(tool="manage_collection", status="ok", data=data)
 
 
@@ -137,6 +193,19 @@ async def _handle_save_note(
         content_md=args.content_md,
         tags=args.tags,
     )
+    if not (args.note_id and args.note_id.strip()):
+        note_id = _extract_id(data, "note")
+        if note_id:
+            record_turn_mutation(
+                MutationRecord(
+                    tool="save_note",
+                    entity_type="note",
+                    entity_id=note_id,
+                    label=args.title or "Note",
+                    undo_method="DELETE",
+                    undo_path=library_route(scope, f"notes/{quote(note_id, safe='')}"),
+                )
+            )
     return ToolResult(tool="save_note", status="ok", data=data)
 
 

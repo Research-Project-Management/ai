@@ -56,9 +56,7 @@ async def handle_get_overdue_report(
         runtime.scope, pid, completed=False, limit=200
     )
     overdue = [w for w in items if w.is_overdue and not w.completed]
-    runtime.add_widget(
-        build_work_item_overview_widget(overdue, title="Overdue Work Items")
-    )
+    runtime.add_widget(build_work_item_overview_widget(overdue, title="Overdue Work Items"))
     return ProjectToolResult(
         tool="get_overdue_report",
         status="ok",
@@ -89,9 +87,7 @@ async def handle_audit_project_health(
                     "label": "Health Score",
                     "value": f"{report.score}/100",
                     "tone": (
-                        "good"
-                        if report.score >= 80
-                        else ("warn" if report.score >= 50 else "bad")
+                        "good" if report.score >= 80 else ("warn" if report.score >= 50 else "bad")
                     ),
                 },
             ),
