@@ -16,7 +16,6 @@ services:
       REDIS_URL: "redis://ai-redis:6379"
       QDRANT_URL: "http://ai-qdrant:6333"
       WEB_SEARCH_SEARXNG_URL: "http://ai-searxng:8080"
-      EMBEDDING_BASE_URL: "http://ai-ollama:11434/v1"
       LIBRARY_BACKEND_URL: "${LIBRARY_BACKEND_URL:-http://host.docker.internal:3000}"
     ports:
       - "127.0.0.1:18420:18420"
@@ -29,27 +28,6 @@ services:
         condition: service_healthy
       ai-searxng:
         condition: service_healthy
-      ai-ollama:
-        condition: service_healthy
-    networks:
-      - ai_network
-
-  ai-ollama:
-    image: ollama/ollama:latest
-    container_name: ai_ollama
-    restart: unless-stopped
-    environment:
-      OLLAMA_KEEP_ALIVE: "-1"
-    ports:
-      - "127.0.0.1:11434:11434"
-    volumes:
-      - ai_ollama_data:/root/.ollama
-    healthcheck:
-      test: ["CMD", "ollama", "list"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 10s
     networks:
       - ai_network
 
@@ -131,7 +109,6 @@ volumes:
   ai_postgres_data:
   ai_qdrant_data:
   ai_redis_data:
-  ai_ollama_data:
 
 networks:
   ai_network:
