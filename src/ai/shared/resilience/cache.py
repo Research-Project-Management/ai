@@ -97,9 +97,7 @@ class RedisToolCache:
             return
         try:
             serialized = json.dumps(value, default=str)
-            await await_redis(
-                self._redis.set(self._prefixed(key), serialized, ex=ttl_seconds)
-            )
+            await await_redis(self._redis.set(self._prefixed(key), serialized, ex=ttl_seconds))
         except (RedisError, TypeError, ValueError) as exc:
             logger.warning("RedisToolCache.set failed (fail-open) for %s: %s", key, exc)
 

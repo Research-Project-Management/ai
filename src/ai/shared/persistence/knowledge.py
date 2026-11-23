@@ -116,9 +116,7 @@ class QdrantKnowledgeStore:
         ops: list[models.AliasOperations] = []
         if existing is not None:
             ops.append(
-                models.DeleteAliasOperation(
-                    delete_alias=models.DeleteAlias(alias_name=self._alias)
-                )
+                models.DeleteAliasOperation(delete_alias=models.DeleteAlias(alias_name=self._alias))
             )
         ops.append(
             models.CreateAliasOperation(
@@ -150,6 +148,10 @@ class QdrantKnowledgeStore:
                 )
             await self._ensure_alias()
             self._collection_ready = True
+
+    async def ensure_ready(self) -> None:
+        """Eagerly verify/create the target collection and alias before serving traffic."""
+        await self._ensure_collection()
 
     async def upsert(self, doc: KnowledgeDocumentInput) -> int:
         chunks = list(doc.chunks) if doc.chunks else chunk_text(doc.content)

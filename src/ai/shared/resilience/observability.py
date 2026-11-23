@@ -93,6 +93,72 @@ class ToolExecutionMetrics:
             return out
 
 
+@dataclass
+class _LLMStat:
+    role: str
+    model: str
+    calls: int = 0
+    errors: int = 0
+    input_tokens: int = 0
+    output_tokens: int = 0
+    total_latency_ms: float = 0.0
+
+
+class LLMCallMetrics:
+    """Thread-safe per-(role, model) LLM latency, error, and token counter registry."""
+
+    def __init__(self) -> None:
+        self._stats: dict[str, _LLMStat] = {}
+        self._lock = threading.Lock()
+
+    def record_call(
+        self,
+        role: str,
+        model: str,
+        *,
+        latency_ms: float,
+        ok: bool,
+        input_tokens: int = 0,
+        output_tokens: int = 0,
+    ) -> None:
+        """Record a single LLM invocation by `(role, model)` with latency and token usage."""
+        clean_role = role.strip() or "default"
+        clean_model = model.strip() or "unknown"
+        key = f"{clean_role}:{clean_model}"
+        bounded_latency = max(0.0, float(latency_ms))
+        in_tok = max(0, int(input_tokens))
+        out_tok = max(0, int(output_tokens))
+        with self._lock:
+            stat = self._stats.get(key)
+            if stat is None:
+                stat = _LLMStat(role=clean_role, model=clean_model)
+                self._stats[key] = stat
+            stat.calls += 1
+            if not ok:
+                stat.errors += 1
+            stat.input_tokens += in_tok
+            stat.output_tokens += out_tok
+            stat.total_latency_ms += bounded_latency
+
+    def snapshot(self) -> dict[str, dict[str, int | float | str]]:
+        """Return JSON-ready breakdown keyed by `role:model` including `avg_latency_ms`."""
+        with self._lock:
+            out: dict[str, dict[str, int | float | str]] = {}
+            for key, stat in self._stats.items():
+                avg = stat.total_latency_ms / stat.calls if stat.calls > 0 else 0.0
+                out[key] = {
+                    "role": stat.role,
+                    "model": stat.model,
+                    "calls": stat.calls,
+                    "errors": stat.errors,
+                    "input_tokens": stat.input_tokens,
+                    "output_tokens": stat.output_tokens,
+                    "total_latency_ms": round(stat.total_latency_ms, 2),
+                    "avg_latency_ms": round(avg, 2),
+                }
+            return out
+
+
 @dataclass(frozen=True)
 class _UsageEvent:
     timestamp: float
@@ -141,10 +207,9 @@ class InMemoryTokenBudget:
         now = time.monotonic()
         bucket = self._bucket(scope, now)
         tokens = max(usage.total_tokens, usage.input_tokens + usage.output_tokens)
-        cost_usd = (
-            (usage.input_tokens / 1000.0) * self._cost_in_per_1k
-            + (usage.output_tokens / 1000.0) * self._cost_out_per_1k
-        )
+        cost_usd = (usage.input_tokens / 1000.0) * self._cost_in_per_1k + (
+            usage.output_tokens / 1000.0
+        ) * self._cost_out_per_1k
         if tokens > 0 or cost_usd > 0.0:
             bucket.append(_UsageEvent(timestamp=now, total_tokens=tokens, cost_usd=cost_usd))
         return self._status(bucket)
@@ -225,18 +290,15 @@ class RedisTokenBudget:
             cost_micros = int(raw_cost) if raw_cost is not None else 0
             return self._status(used, cost_micros)
         except (RedisError, OSError, TimeoutError, ValueError) as exc:
-            logger.warning(
-                "RedisTokenBudget.check failed (fail-open) for %s: %s", clean_scope, exc
-            )
+            logger.warning("RedisTokenBudget.check failed (fail-open) for %s: %s", clean_scope, exc)
             return self._fail_open_status()
 
     async def record(self, scope: str, usage: RunUsage) -> TokenQuotaStatus:
         clean_scope = scope.strip() or "default"
         tokens = max(usage.total_tokens, usage.input_tokens + usage.output_tokens)
-        cost_usd = (
-            (usage.input_tokens / 1000.0) * self._cost_in_per_1k
-            + (usage.output_tokens / 1000.0) * self._cost_out_per_1k
-        )
+        cost_usd = (usage.input_tokens / 1000.0) * self._cost_in_per_1k + (
+            usage.output_tokens / 1000.0
+        ) * self._cost_out_per_1k
         cost_micros = max(0, round(cost_usd * 1_000_000))
         if tokens <= 0 and cost_micros <= 0:
             return await self.check(clean_scope)
@@ -245,15 +307,9 @@ class RedisTokenBudget:
             tok_key = self._tokens_key(clean_scope)
             cost_key = self._cost_key(clean_scope)
             used = int(await await_redis(self._redis.incrby(tok_key, tokens)))
-            await await_redis(
-                self._redis.expire(tok_key, self._window_seconds, nx=True)
-            )
-            total_micros = int(
-                await await_redis(self._redis.incrby(cost_key, cost_micros))
-            )
-            await await_redis(
-                self._redis.expire(cost_key, self._window_seconds, nx=True)
-            )
+            await await_redis(self._redis.expire(tok_key, self._window_seconds, nx=True))
+            total_micros = int(await await_redis(self._redis.incrby(cost_key, cost_micros)))
+            await await_redis(self._redis.expire(cost_key, self._window_seconds, nx=True))
             await await_redis(self._redis.sadd(self._scopes_key, clean_scope))
             return self._status(used, total_micros)
         except (RedisError, OSError, TimeoutError, ValueError) as exc:

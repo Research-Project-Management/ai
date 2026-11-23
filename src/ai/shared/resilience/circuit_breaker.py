@@ -55,9 +55,7 @@ class CircuitBreaker:
 
             if self._state == CircuitState.HALF_OPEN:
                 if self._half_open_in_flight >= self._config.half_open_max_calls:
-                    raise CircuitOpenError(
-                        self.name, self._config.recovery_timeout_seconds
-                    )
+                    raise CircuitOpenError(self.name, self._config.recovery_timeout_seconds)
                 self._half_open_in_flight += 1
 
     async def record_success(self) -> None:
@@ -101,9 +99,7 @@ class CircuitBreakerRegistry:
         """Return existing breaker for `name` or register a new one."""
         clean_name = name.strip()
         if clean_name not in self._breakers:
-            self._breakers[clean_name] = CircuitBreaker(
-                clean_name, config or self._default_config
-            )
+            self._breakers[clean_name] = CircuitBreaker(clean_name, config or self._default_config)
         return self._breakers[clean_name]
 
     def snapshot(self) -> dict[str, str]:

@@ -33,7 +33,9 @@ class UnverifiedPageClaimRule:
         findings: list[AuditFinding] = []
         for node in graph.get_nodes_by_domain(EntityDomain.PAGE):
             # Check if node claims empirical results but lacks an incoming PROVES edge
-            has_claim = bool(node.attributes.get("claims_metric") or node.attributes.get("has_benchmark"))
+            has_claim = bool(
+                node.attributes.get("claims_metric") or node.attributes.get("has_benchmark")
+            )
             if has_claim:
                 in_edges = graph.get_in_edges(node.id)
                 has_proof = False
@@ -97,7 +99,9 @@ class StaleExperimentMetricRule:
     def evaluate(self, graph: ProvenanceGraph) -> list[AuditFinding]:
         findings: list[AuditFinding] = []
         for run_node in graph.get_nodes_by_domain(EntityDomain.EXPERIMENT):
-            if bool(run_node.attributes.get("is_stale") or run_node.attributes.get("superseded_by")):
+            if bool(
+                run_node.attributes.get("is_stale") or run_node.attributes.get("superseded_by")
+            ):
                 for edge in graph.get_out_edges(run_node.id):
                     if edge.relation == RelationType.PROVES:
                         page_node = graph.get_node(edge.dst_id)
@@ -120,11 +124,15 @@ class ScientificAuditEngine:
     """Coordinates and executes all registered scientific consistency rules."""
 
     def __init__(self, rules: list[AuditRule] | None = None) -> None:
-        self._rules: list[AuditRule] = rules if rules is not None else [
-            UnverifiedPageClaimRule(),
-            OrphanLiteratureRule(),
-            StaleExperimentMetricRule(),
-        ]
+        self._rules: list[AuditRule] = (
+            rules
+            if rules is not None
+            else [
+                UnverifiedPageClaimRule(),
+                OrphanLiteratureRule(),
+                StaleExperimentMetricRule(),
+            ]
+        )
 
     def run_audits(self, graph: ProvenanceGraph) -> list[AuditFinding]:
         findings: list[AuditFinding] = []

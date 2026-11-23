@@ -101,9 +101,7 @@ class HttpGitHubArtifactClient(GitHubArtifactGateway):
         if not clean_path:
             raise GitHubArtifactError("File path cannot be empty.")
 
-        auth_scope = (
-            hashlib.sha256(token.encode("utf-8")).hexdigest()[:12] if token else "public"
-        )
+        auth_scope = hashlib.sha256(token.encode("utf-8")).hexdigest()[:12] if token else "public"
         cache_key = build_cache_key(
             "github_artifact",
             {
@@ -160,7 +158,9 @@ class HttpGitHubArtifactClient(GitHubArtifactGateway):
                     decoded_bytes = base64.b64decode(raw_b64.replace("\n", ""))
                     decoded_text = decoded_bytes.decode("utf-8")
                 except ValueError as exc:  # binascii.Error and UnicodeDecodeError subclass it
-                    raise GitHubArtifactError(f"Failed to decode base64 file content: {exc}") from exc
+                    raise GitHubArtifactError(
+                        f"Failed to decode base64 file content: {exc}"
+                    ) from exc
             else:
                 decoded_text = raw_b64
 
@@ -168,9 +168,7 @@ class HttpGitHubArtifactClient(GitHubArtifactGateway):
             resolved_sha = clean_ref
             if not _SHA_REGEX.match(clean_ref):
                 # Query commit endpoint to get true commit SHA
-                commits_url = (
-                    f"https://api.github.com/repos/{clean_repo}/commits/{clean_ref}"
-                )
+                commits_url = f"https://api.github.com/repos/{clean_repo}/commits/{clean_ref}"
                 commit_res = await self._send(client, commits_url, token)
                 if commit_res.status_code == 200:
                     commit_data = commit_res.json()

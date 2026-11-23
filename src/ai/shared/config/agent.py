@@ -2,7 +2,7 @@
 
 from pydantic import Field, field_validator
 
-from ai.shared.config.base import EnvConfigBase
+from ai.shared.config.base import EnvConfigBase, validate_http_url
 
 
 class BackendAgentConfig(EnvConfigBase):
@@ -15,8 +15,9 @@ class BackendAgentConfig(EnvConfigBase):
     @field_validator("backend_url")
     @classmethod
     def _validate_backend_url(cls, value: str) -> str:
-        stripped = value.strip().rstrip("/")
-        if stripped and not stripped.startswith(("http://", "https://")):
-            prefix = str(cls.model_config.get("env_prefix", ""))
-            raise ValueError(f"{prefix}BACKEND_URL must start with http:// or https://")
-        return stripped
+        prefix = str(cls.model_config.get("env_prefix", ""))
+        return validate_http_url(
+            value,
+            strip_trailing_slash=True,
+            label=f"{prefix}BACKEND_URL",
+        )

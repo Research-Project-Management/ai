@@ -26,7 +26,31 @@ class GatedToolSpec(Protocol):
     def args_schema(self) -> type[BaseModel]: ...
 
 
+class ConfirmableToolSpec(Protocol):
+    """Tool spec capable of formatting a human confirmation prompt for HITL approval."""
+
+    @property
+    def name(self) -> str: ...
+    def format_confirmation(self, args: dict[str, Any]) -> str: ...
+
+
 ConfirmationBuilder = Callable[[Any, str, dict[str, Any]], dict[str, Any]]
+
+
+def build_confirmation_payload(
+    *,
+    interrupt_id: str,
+    spec: ConfirmableToolSpec,
+    validated_args: dict[str, Any],
+) -> dict[str, Any]:
+    """Build the standard LangGraph HITL confirmation interrupt payload."""
+    return {
+        "id": interrupt_id,
+        "tool": spec.name,
+        "description": spec.format_confirmation(validated_args),
+        "args": validated_args,
+        "allowed_decisions": ["approve", "reject"],
+    }
 
 
 def run_policy_gate(
@@ -108,3 +132,12 @@ def run_policy_gate(
         "observations": [*observations, *new_observations],
         "done": len(approved) == 0 and has_rejection,
     }
+
+
+__all__ = [
+    "ConfirmableToolSpec",
+    "ConfirmationBuilder",
+    "GatedToolSpec",
+    "build_confirmation_payload",
+    "run_policy_gate",
+]

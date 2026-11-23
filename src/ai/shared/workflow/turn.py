@@ -38,3 +38,43 @@ def recent_tail(messages: Sequence[BaseMessage], *, limit: int = 4) -> list[str]
         if text:
             lines.append(f"{role}: {text[:_TAIL_CHARS]}")
     return lines
+
+
+def extract_peer_findings(
+    state: Mapping[str, Any],
+    *,
+    exclude_agent: str,
+    include_citations: bool = False,
+    max_chars: int = 2500,
+) -> list[dict[str, Any]]:
+    """Collect successful peer agent outputs from `RootState` for cross-agent grounding."""
+    outputs = state.get("agent_outputs") or ()
+    findings: list[dict[str, Any]] = []
+    for out in outputs:
+        if out.agent == exclude_agent or out.status != "ok":
+            continue
+        snippet = out.content.strip()
+        if len(snippet) > max_chars:
+            snippet = snippet[:max_chars] + "\n...[truncated]"
+        cite_summaries = (
+            [
+                {
+                    "source_id": c.source_id,
+                    "title": c.title,
+                    "url": c.url,
+                    "page": c.page,
+                }
+                for c in out.citations[:10]
+            ]
+            if include_citations
+            else []
+        )
+        if snippet or cite_summaries:
+            entry: dict[str, Any] = {"agent": out.agent, "content": snippet}
+            if cite_summaries:
+                entry["citations"] = cite_summaries
+            findings.append(entry)
+    return findings
+
+
+__all__ = ["extract_peer_findings", "latest_query", "recent_tail"]

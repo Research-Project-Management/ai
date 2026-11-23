@@ -18,7 +18,7 @@ from ai.shared.workflow.batch import (
     dedupe_citations,
     observation_of,
 )
-from ai.shared.workflow.events import ToolEventPublisher
+from ai.shared.workflow.events import ToolEventPublisher, summarize_tool_input
 
 logger = logging.getLogger(__name__)
 
@@ -88,8 +88,14 @@ async def run_tool_batch[R: ToolOutcome, C: HasProvenance](
         if spec is None:
             batch.observe(risk_tier=None, status=None)
             continue
-        args = spec.args_schema.model_validate(call.get("args") or {})
-        await events.emit_tool_started(spec.name, config)
+        raw_args = call.get("args")
+        args_mapping = raw_args if isinstance(raw_args, Mapping) else {}
+        args = spec.args_schema.model_validate(args_mapping)
+        await events.emit_tool_started(
+            spec.name,
+            config,
+            tool_input=summarize_tool_input(args_mapping) or None,
+        )
         try:
             result = await execute_tool_safely(
                 invoke,
@@ -110,9 +116,8 @@ async def run_tool_batch[R: ToolOutcome, C: HasProvenance](
         batch.observe(risk_tier=spec.risk_tier, status=result.status)
         if after_result is not None:
             await after_result(result)
-        await events.emit_tool_completed(spec.name, result.status, config)
+        await events.emit_tool_completed(spec.name, result.status, config, error=result.error)
         obs.append(observation_of(result))
         cites = dedupe_citations(cites, list(result.citations))
 
     return BatchOutcome(observations=obs, citations=cites, is_terminal=batch.is_terminal)
-

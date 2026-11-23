@@ -31,9 +31,7 @@ class PostgresConfig(EnvConfigBase):
     @model_validator(mode="after")
     def _validate_pool_bounds(self) -> Self:
         if self.pg_pool_max_size < self.pg_pool_min_size:
-            raise ValueError(
-                "pg_pool_max_size must be greater than or equal to pg_pool_min_size"
-            )
+            raise ValueError("pg_pool_max_size must be greater than or equal to pg_pool_min_size")
         return self
 
 

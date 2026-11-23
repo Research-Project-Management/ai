@@ -16,11 +16,16 @@ class IngestionConfig(EnvConfigBase):
     chunk_size_tokens: int = Field(default=384, ge=64, le=2048)
     chunk_overlap_tokens: int = Field(default=48, ge=0, le=512)
     max_file_bytes: int = Field(default=50 * 1024 * 1024, ge=1024)
+    max_concurrency: int = Field(default=2, ge=1, le=16)
+    max_queue_size: int = Field(default=50, ge=1, le=1000)
+    job_ttl_seconds: int = Field(default=86400, ge=60, le=604800)
 
     @model_validator(mode="after")
     def _validate_overlap_window(self) -> Self:
         if self.chunk_overlap_tokens >= self.chunk_size_tokens:
-            raise ValueError("INGESTION_CHUNK_OVERLAP_TOKENS must be smaller than chunk_size_tokens")
+            raise ValueError(
+                "INGESTION_CHUNK_OVERLAP_TOKENS must be smaller than chunk_size_tokens"
+            )
         return self
 
 

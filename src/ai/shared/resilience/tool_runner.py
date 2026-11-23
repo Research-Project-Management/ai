@@ -68,9 +68,7 @@ async def execute_tool_safely[T](
     try:
         for _ in range(attempts):
             try:
-                result = await asyncio.wait_for(
-                    fn(*args, **kwargs), timeout=timeout_seconds
-                )
+                result = await asyncio.wait_for(fn(*args, **kwargs), timeout=timeout_seconds)
                 if circuit_breaker is not None:
                     await circuit_breaker.record_success()
                 if cache is not None and cache_key:

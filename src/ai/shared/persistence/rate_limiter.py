@@ -83,9 +83,7 @@ class InMemorySlidingWindowRateLimiter:
         cutoff = now - self._window_seconds
         async with self._lock:
             if len(self._buckets) >= self._max_buckets and key not in self._buckets:
-                stale = [
-                    k for k, b in self._buckets.items() if not b or b[-1] <= cutoff
-                ]
+                stale = [k for k, b in self._buckets.items() if not b or b[-1] <= cutoff]
                 for k in stale:
                     del self._buckets[k]
             bucket = self._buckets[key]

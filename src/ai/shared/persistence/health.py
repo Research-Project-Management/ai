@@ -202,12 +202,8 @@ async def evaluate_health(
     if not probes:
         return "ok", []
 
-    results = list(
-        await asyncio.gather(*(_run_probe(probe, timeout_seconds) for probe in probes))
-    )
+    results = list(await asyncio.gather(*(_run_probe(probe, timeout_seconds) for probe in probes)))
     overall: Literal["ok", "degraded"] = (
-        "degraded"
-        if any(item.required and item.status == "degraded" for item in results)
-        else "ok"
+        "degraded" if any(item.required and item.status == "degraded" for item in results) else "ok"
     )
     return overall, results

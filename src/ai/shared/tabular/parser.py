@@ -64,10 +64,7 @@ class TabularDataParser:
         headers = [h.strip() for h in raw_rows[0]]
         dict_rows: list[dict[str, str]] = []
         for r in raw_rows[1:]:
-            row_dict = {
-                headers[i]: r[i].strip() if i < len(r) else ""
-                for i in range(len(headers))
-            }
+            row_dict = {headers[i]: r[i].strip() if i < len(r) else "" for i in range(len(headers))}
             dict_rows.append(row_dict)
 
         return self.parse_records(
@@ -132,15 +129,21 @@ class TabularDataParser:
             return TabularMatrix(headers=(), rows=())
 
         # Determine method / row label column
-        method_candidates = ("method", "model", "system", "name", "architecture", "baseline", "approach")
+        method_candidates = (
+            "method",
+            "model",
+            "system",
+            "name",
+            "architecture",
+            "baseline",
+            "approach",
+        )
         excluded_meta_cols = frozenset(
             {"seed", "run", "run_id", "trial", "fold", "split", "step", "epoch", "id", "index"}
         )
         method_col = next((h for h in headers if h.lower() in method_candidates), headers[0])
         metric_cols = [
-            h
-            for h in headers
-            if h != method_col and h.strip().lower() not in excluded_meta_cols
+            h for h in headers if h != method_col and h.strip().lower() not in excluded_meta_cols
         ]
 
         # Group by method name to support multi-seed aggregations
@@ -189,7 +192,7 @@ class TabularDataParser:
             if not candidates:
                 continue
 
-            reverse = (dir_mode == MetricDirection.MAXIMIZE)
+            reverse = dir_mode == MetricDirection.MAXIMIZE
             sorted_candidates = sorted(candidates, key=lambda x: x[1], reverse=reverse)
             top_val = sorted_candidates[0][1]
 

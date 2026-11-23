@@ -18,9 +18,7 @@ async def create_memory_store(config: PostgresConfig) -> AsyncIterator[BaseStore
 
     from langgraph.store.postgres.aio import AsyncPostgresStore
 
-    async with AsyncPostgresStore.from_conn_string(
-        config.database_url.get_secret_value()
-    ) as store:
+    async with AsyncPostgresStore.from_conn_string(config.database_url.get_secret_value()) as store:
         if config.pg_setup_on_startup:
             await store.setup()
         yield store

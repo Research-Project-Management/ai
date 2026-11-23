@@ -16,8 +16,7 @@ def _escape_latex_text(text: str) -> str:
         return text
     parts = _MATH_SPAN_RE.split(text)
     return "".join(
-        part if idx % 2 else _LATEX_SPECIAL_RE.sub(r"\\\1", part)
-        for idx, part in enumerate(parts)
+        part if idx % 2 else _LATEX_SPECIAL_RE.sub(r"\\\1", part) for idx, part in enumerate(parts)
     )
 
 

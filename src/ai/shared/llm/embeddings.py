@@ -175,9 +175,8 @@ def build_embedder(
 
     if embedding_cfg.has_fallback:
         fb_base = embedding_cfg.fallback_base_url.strip() or effective_base
-        fb_key = (
-            embedding_cfg.fallback_api_key.get_secret_value().strip()
-            or ("local" if embedding_cfg.fallback_base_url.strip() else primary_key)
+        fb_key = embedding_cfg.fallback_api_key.get_secret_value().strip() or (
+            "local" if embedding_cfg.fallback_base_url.strip() else primary_key
         )
         fb_model = embedding_cfg.effective_fallback_model
         secondary = OpenAICompatibleEmbedder(

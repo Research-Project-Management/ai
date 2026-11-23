@@ -74,10 +74,7 @@ class RedisFeedbackSink:
         try:
             raw_items = await await_redis(self._redis.lrange(key, 0, 99))
             if raw_items:
-                return [
-                    FeedbackRecord.model_validate(json.loads(raw))
-                    for raw in raw_items
-                ]
+                return [FeedbackRecord.model_validate(json.loads(raw)) for raw in raw_items]
         except (RedisError, OSError, TimeoutError, TypeError, ValueError) as exc:
             logger.warning("RedisFeedbackSink.list_by_trace failed (fail-open): %s", exc)
         return await self._fallback.list_by_trace(trace_id, space_id=space_id)

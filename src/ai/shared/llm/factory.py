@@ -1,6 +1,7 @@
 """Pure LLM Gateway factory with role tiering, Round-Robin Key Pool, BYOK override, and Fallback."""
 
 import itertools
+import time
 from collections import OrderedDict
 from collections.abc import AsyncIterator, Iterator
 from contextlib import contextmanager
@@ -14,6 +15,8 @@ from langchain_openai import ChatOpenAI
 from pydantic import BaseModel, ConfigDict, SecretStr
 
 from ai.shared.config.llm import LLMConfig
+from ai.shared.contracts.run_control import RunUsage
+from ai.shared.resilience.observability import LLMCallMetrics
 
 ChatRunnable = Runnable[LanguageModelInput, AIMessage]
 ModelRole = Literal["default", "router", "agent"]
@@ -75,6 +78,22 @@ def bind_llm_override(override: LLMOverride | None) -> Iterator[None]:
         _ACTIVE_LLM_OVERRIDE.reset(token)
 
 
+def _extract_token_counts(message: Any) -> tuple[int, int]:
+    """Extract `(input_tokens, output_tokens)` from LangChain `usage_metadata` or `token_usage`."""
+    usage = RunUsage.from_message(message)
+    if usage.input_tokens or usage.output_tokens:
+        return usage.input_tokens, usage.output_tokens
+    meta = getattr(message, "response_metadata", None)
+    if isinstance(meta, dict):
+        token_usage = meta.get("token_usage")
+        if isinstance(token_usage, dict):
+            return (
+                max(0, int(token_usage.get("prompt_tokens") or 0)),
+                max(0, int(token_usage.get("completion_tokens") or 0)),
+            )
+    return 0, 0
+
+
 class ContextAwareChatRunnable(Runnable[LanguageModelInput, AIMessage]):
     """Transparent proxy that routes `agent` and `default` calls to BYOK when bound in ContextVar."""
 
@@ -87,6 +106,7 @@ class ContextAwareChatRunnable(Runnable[LanguageModelInput, AIMessage]):
         model: str | None = None,
         temperature: float | None = None,
         timeout: float | None = None,
+        metrics: LLMCallMetrics | None = None,
     ) -> None:
         super().__init__()
         self._platform = platform_runnable
@@ -95,6 +115,7 @@ class ContextAwareChatRunnable(Runnable[LanguageModelInput, AIMessage]):
         self._model = model
         self._temperature = temperature
         self._timeout = timeout
+        self._metrics = metrics
         self._byok_cache: OrderedDict[tuple[str, str, str], ChatRunnable] = OrderedDict()
 
     @property
@@ -105,8 +126,11 @@ class ContextAwareChatRunnable(Runnable[LanguageModelInput, AIMessage]):
     def fallbacks(self) -> list[Any]:
         return list(getattr(self._platform, "fallbacks", ()))
 
+    def _active_override(self) -> LLMOverride | None:
+        return get_llm_override() if self._role != "router" else None
+
     def _active_target(self) -> ChatRunnable:
-        override = get_llm_override() if self._role != "router" else None
+        override = self._active_override()
         if override is not None:
             raw_key = override.api_key.get_secret_value().strip()
             if raw_key:
@@ -129,13 +153,61 @@ class ContextAwareChatRunnable(Runnable[LanguageModelInput, AIMessage]):
                 return built
         return self._platform
 
+    def _resolve_metric_model_name(self, response: Any = None) -> str:
+        if response is not None:
+            meta = getattr(response, "response_metadata", None)
+            if isinstance(meta, dict):
+                reported = str(meta.get("model_name") or "").strip()
+                if reported:
+                    return reported
+        override = self._active_override()
+        override_model = override.model.strip() if override is not None else ""
+        return _resolve_model(self._config, self._role, override_model or self._model)
+
+    def _record_metric(
+        self,
+        *,
+        start: float,
+        ok: bool,
+        response: Any = None,
+        in_tokens: int = 0,
+        out_tokens: int = 0,
+    ) -> None:
+        if self._metrics is None:
+            return
+        elapsed_ms = (time.perf_counter() - start) * 1000.0
+        model_name = self._resolve_metric_model_name(response)
+        self._metrics.record_call(
+            self._role,
+            model_name,
+            latency_ms=elapsed_ms,
+            ok=ok,
+            input_tokens=in_tokens,
+            output_tokens=out_tokens,
+        )
+
     def invoke(
         self,
         input: LanguageModelInput,
         config: RunnableConfig | None = None,
         **kwargs: Any,
     ) -> AIMessage:
-        return self._active_target().invoke(input, config=config, **kwargs)
+        start = time.perf_counter()
+        response: AIMessage | None = None
+        ok = False
+        try:
+            response = self._active_target().invoke(input, config=config, **kwargs)
+            ok = True
+            return response
+        finally:
+            in_tok, out_tok = _extract_token_counts(response) if response is not None else (0, 0)
+            self._record_metric(
+                start=start,
+                ok=ok,
+                response=response,
+                in_tokens=in_tok,
+                out_tokens=out_tok,
+            )
 
     async def ainvoke(
         self,
@@ -143,7 +215,22 @@ class ContextAwareChatRunnable(Runnable[LanguageModelInput, AIMessage]):
         config: RunnableConfig | None = None,
         **kwargs: Any,
     ) -> AIMessage:
-        return await self._active_target().ainvoke(input, config=config, **kwargs)
+        start = time.perf_counter()
+        response: AIMessage | None = None
+        ok = False
+        try:
+            response = await self._active_target().ainvoke(input, config=config, **kwargs)
+            ok = True
+            return response
+        finally:
+            in_tok, out_tok = _extract_token_counts(response) if response is not None else (0, 0)
+            self._record_metric(
+                start=start,
+                ok=ok,
+                response=response,
+                in_tokens=in_tok,
+                out_tokens=out_tok,
+            )
 
     def stream(
         self,
@@ -151,7 +238,27 @@ class ContextAwareChatRunnable(Runnable[LanguageModelInput, AIMessage]):
         config: RunnableConfig | None = None,
         **kwargs: Any,
     ) -> Iterator[AIMessage]:
-        yield from self._active_target().stream(input, config=config, **kwargs)
+        start = time.perf_counter()
+        in_tok = 0
+        out_tok = 0
+        last_chunk: Any = None
+        ok = False
+        try:
+            for chunk in self._active_target().stream(input, config=config, **kwargs):
+                last_chunk = chunk
+                c_in, c_out = _extract_token_counts(chunk)
+                in_tok += c_in
+                out_tok += c_out
+                yield chunk
+            ok = True
+        finally:
+            self._record_metric(
+                start=start,
+                ok=ok,
+                response=last_chunk,
+                in_tokens=in_tok,
+                out_tokens=out_tok,
+            )
 
     async def astream(
         self,
@@ -159,8 +266,27 @@ class ContextAwareChatRunnable(Runnable[LanguageModelInput, AIMessage]):
         config: RunnableConfig | None = None,
         **kwargs: Any,
     ) -> AsyncIterator[AIMessage]:
-        async for chunk in self._active_target().astream(input, config=config, **kwargs):
-            yield chunk
+        start = time.perf_counter()
+        in_tok = 0
+        out_tok = 0
+        last_chunk: Any = None
+        ok = False
+        try:
+            async for chunk in self._active_target().astream(input, config=config, **kwargs):
+                last_chunk = chunk
+                c_in, c_out = _extract_token_counts(chunk)
+                in_tok += c_in
+                out_tok += c_out
+                yield chunk
+            ok = True
+        finally:
+            self._record_metric(
+                start=start,
+                ok=ok,
+                response=last_chunk,
+                in_tokens=in_tok,
+                out_tokens=out_tok,
+            )
 
 
 def _resolve_model(config: LLMConfig, role: ModelRole, model: str | None) -> str:
@@ -229,13 +355,14 @@ def build_chat_model(
         )
 
     active_model = _resolve_model(config, role, model)
+    active_base_url = config.effective_base_url(role) or None
     rotation_idx = next(_key_rotation_counter) if key_index is None else key_index
-    primary_key, backup_keys = _rotate_key_pool(config.api_key_pool, rotation_idx)
+    primary_key, backup_keys = _rotate_key_pool(config.role_api_key_pool(role), rotation_idx)
 
     primary = ChatOpenAI(
         model=active_model,
         api_key=primary_key,
-        base_url=config.base_url or None,
+        base_url=active_base_url,
         temperature=active_temp,
         timeout=active_timeout,
         max_retries=config.max_retries,
@@ -247,7 +374,7 @@ def build_chat_model(
         ChatOpenAI(
             model=active_model,
             api_key=extra_key,
-            base_url=config.base_url or None,
+            base_url=active_base_url,
             temperature=active_temp,
             timeout=active_timeout,
             max_retries=config.fallback_max_retries,
