@@ -22,7 +22,9 @@ def _space_namespace(space_id: str, namespace: str) -> tuple[str, str, str]:
     return ("spaces", space_id, namespace)
 
 
-def _to_item_response(item: Item | SearchItem, *, space_id: str, namespace: str) -> StoreItemResponse:
+def _to_item_response(
+    item: Item | SearchItem, *, space_id: str, namespace: str
+) -> StoreItemResponse:
     raw_score = getattr(item, "score", None)
     return StoreItemResponse(
         space_id=space_id,

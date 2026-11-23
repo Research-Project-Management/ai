@@ -5,12 +5,18 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 
-from ai.agents.rag.ingestion.contracts import IngestDocumentRequest, UnsupportedDocumentFormatError
+from ai.agents.rag.ingestion.contracts import IngestDocumentRequest
+from ai.agents.rag.ingestion.jobs import (
+    IngestionJobRecord,
+    IngestionJobRunner,
+    IngestionQueueFullError,
+)
 from ai.agents.rag.ingestion.pipeline import IngestionPipeline
 from ai.agents.rag.retrieval.contracts import RetrievalQuery
 from ai.agents.rag.retrieval.engine import RetrievalEngine
 from ai.api.dependencies import (
     enforce_space_rate_limit,
+    get_ingestion_job_runner,
     get_ingestion_pipeline,
     get_knowledge_store,
     get_rate_limiter,
@@ -35,19 +41,37 @@ from ai.shared.contracts.rate_limit import RateLimiter
 router = APIRouter(tags=["knowledge"], dependencies=[Depends(verify_internal_key)])
 
 
-@router.post("/knowledge/ingest", response_model=KnowledgeIngestResponse)
+def _to_ingest_response(record: IngestionJobRecord) -> KnowledgeIngestResponse:
+    return KnowledgeIngestResponse(
+        job_id=record.job_id,
+        status=record.status,
+        space_id=record.space_id,
+        source_type=record.source_type,
+        source_id=record.source_id,
+        title=record.title,
+        pages_parsed=record.pages_parsed,
+        chunks_indexed=record.chunks_indexed,
+        error=record.error,
+    )
+
+
+@router.post(
+    "/knowledge/ingest",
+    status_code=status.HTTP_202_ACCEPTED,
+    response_model=KnowledgeIngestResponse,
+)
 async def ingest_knowledge_file(
     file: Annotated[UploadFile, File(...)],
     space_id: Annotated[str, Form(min_length=1)],
     source_type: Annotated[str, Form(min_length=1)],
     source_id: Annotated[str, Form(min_length=1)],
-    pipeline: Annotated[IngestionPipeline, Depends(get_ingestion_pipeline)],
+    runner: Annotated[IngestionJobRunner, Depends(get_ingestion_job_runner)],
     limiter: Annotated[RateLimiter, Depends(get_rate_limiter)],
     title: Annotated[str, Form()] = "",
     url: Annotated[str | None, Form()] = None,
     metadata_json: Annotated[str, Form()] = "{}",
 ) -> KnowledgeIngestResponse:
-    """Parse PDF/DOCX/Markdown/TXT uploads, structure-chunk, and index into Qdrant."""
+    """Validate and enqueue PDF/DOCX/Markdown/TXT uploads for bounded async indexing."""
     await enforce_space_rate_limit(space_id, limiter)
     try:
         parsed_meta = json.loads(metadata_json)
@@ -63,8 +87,13 @@ async def ingest_knowledge_file(
             detail="metadata_json must decode to a JSON object",
         )
 
-    max_bytes = pipeline.max_file_bytes
+    max_bytes = runner.max_file_bytes
     raw_bytes = await file.read(max_bytes + 1)
+    if not raw_bytes:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Uploaded file is empty",
+        )
     if len(raw_bytes) > max_bytes:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -82,21 +111,29 @@ async def ingest_knowledge_file(
         metadata=parsed_meta,
     )
     try:
-        result = await pipeline.ingest(request)
-    except (UnsupportedDocumentFormatError, ValueError) as exc:
+        record = await runner.enqueue(request)
+    except IngestionQueueFullError as exc:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail=str(exc),
         ) from exc
 
-    return KnowledgeIngestResponse(
-        space_id=result.space_id,
-        source_type=result.source_type,
-        source_id=result.source_id,
-        title=result.title,
-        pages_parsed=result.pages_parsed,
-        chunks_indexed=result.chunks_indexed,
-    )
+    return _to_ingest_response(record)
+
+
+@router.get("/knowledge/jobs/{job_id}", response_model=KnowledgeIngestResponse)
+async def get_ingestion_job(
+    job_id: str,
+    runner: Annotated[IngestionJobRunner, Depends(get_ingestion_job_runner)],
+) -> KnowledgeIngestResponse:
+    """Return the latest status of an asynchronous knowledge ingestion job."""
+    record = await runner.get_job(job_id)
+    if record is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Ingestion job '{job_id}' not found",
+        )
+    return _to_ingest_response(record)
 
 
 @router.post("/knowledge/upsert", response_model=KnowledgeUpsertResponse)

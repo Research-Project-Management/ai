@@ -4,9 +4,13 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from ai.agents.rag.ingestion.jobs import IngestionJobStatus
+from ai.orchestrator.rewind import CheckpointSummary
 from ai.shared.contracts.health import ComponentStatus
 from ai.shared.contracts.knowledge import KnowledgeHit
 from ai.shared.contracts.run_control import FeedbackRecord, RunUsage
+from ai.shared.llm.catalog import ModelCatalogEntry
+from ai.shared.resilience.mutations import RevertStepResult
 
 
 class ChatMessageInput(BaseModel):
@@ -86,6 +90,38 @@ class SpaceThreadsDeleteResponse(BaseModel):
     deleted_threads: int
 
 
+class TurnRevertRequest(BaseModel):
+    entity_ids: list[str] | None = None
+
+
+class TurnRevertResponse(BaseModel):
+    trace_id: str
+    space_id: str
+    reverted_count: int
+    results: list[RevertStepResult] = Field(default_factory=list)
+
+
+class ThreadCheckpointsResponse(BaseModel):
+    chat_id: str
+    space_id: str
+    checkpoints: list[CheckpointSummary] = Field(default_factory=list)
+
+
+class ThreadRewindRequest(BaseModel):
+    checkpoint_id: str = Field(..., min_length=1)
+    revert_trace_ids: list[str] = Field(default_factory=list)
+
+
+class ThreadRewindResponse(BaseModel):
+    chat_id: str
+    space_id: str
+    target_checkpoint_id: str
+    new_checkpoint_id: str
+    message_count: int
+    reverted_count: int = 0
+    revert_results: list[RevertStepResult] = Field(default_factory=list)
+
+
 class StorePutRequest(BaseModel):
     space_id: str = Field(..., min_length=1)
     namespace: str = Field(default="default", min_length=1)
@@ -153,12 +189,15 @@ class KnowledgeUpsertResponse(BaseModel):
 
 
 class KnowledgeIngestResponse(BaseModel):
+    job_id: str
+    status: IngestionJobStatus
     space_id: str
     source_type: str
     source_id: str
-    title: str
-    pages_parsed: int
-    chunks_indexed: int
+    title: str = ""
+    pages_parsed: int = 0
+    chunks_indexed: int = 0
+    error: str = ""
 
 
 class KnowledgeSearchRequest(BaseModel):
@@ -189,6 +228,10 @@ class AgentInfoResponse(BaseModel):
 
 class AgentListResponse(BaseModel):
     agents: list[AgentInfoResponse] = Field(default_factory=list)
+
+
+class ModelListResponse(BaseModel):
+    models: list[ModelCatalogEntry] = Field(default_factory=list)
 
 
 class FeedbackCreateRequest(BaseModel):

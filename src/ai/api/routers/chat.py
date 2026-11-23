@@ -28,7 +28,13 @@ from ai.shared.contracts.auth import bind_delegation_token
 from ai.shared.contracts.context import SpaceContext
 from ai.shared.contracts.rate_limit import RateLimiter, RateLimitResult
 from ai.shared.contracts.run_control import RunCancellationRegistry, RunUsage
+from ai.shared.llm.catalog import resolve_catalog_override
 from ai.shared.llm.factory import LLMOverride, bind_llm_override, parse_llm_override
+from ai.shared.resilience.mutations import (
+    TurnMutationJournal,
+    bind_turn_journal,
+    build_revert_artifact,
+)
 from ai.shared.resilience.observability import TokenBudget
 from ai.shared.resilience.tool_runner import bind_tool_metrics
 
@@ -110,13 +116,16 @@ async def _prepare_request(
 ) -> tuple[SpaceContext, RateLimitResult, RunnableConfig, LLMOverride | None]:
     space = build_space_context(payload, raw_request, x_trace_id=x_trace_id)
     limit_result = await enforce_space_rate_limit(space.space_id, limiter)
-    llm_override = (
-        parse_llm_override(payload.context)
+    byok_override = (
+        parse_llm_override(payload.context) if isinstance(payload, ChatRequest) else None
+    )
+    if byok_override is None:
+        await enforce_space_token_budget(space.space_id, token_budget)
+    llm_override = byok_override or (
+        resolve_catalog_override(payload.context, raw_request.app.state.settings.llm)
         if isinstance(payload, ChatRequest)
         else None
     )
-    if llm_override is None:
-        await enforce_space_token_budget(space.space_id, token_budget)
     await cancel_registry.clear(space.space_id, space.chat_id)
     return space, limit_result, _build_run_config(space), llm_override
 
@@ -151,10 +160,15 @@ async def _build_sync_response(
     stateless: bool,
     space_id: str,
     token_budget: TokenBudget | None,
+    mutation_journal: TurnMutationJournal | None = None,
 ) -> ChatResponse:
     usage = _extract_response_usage(result, started)
     if token_budget is not None:
         await token_budget.record(space_id, usage)
+    artifacts = serialize_artifacts(result.get("artifacts"))
+    revert_art = build_revert_artifact(mutation_journal, space_id=space_id, trace_id=trace_id)
+    if revert_art is not None:
+        artifacts = {**artifacts, "revertible_turn": revert_art}
     if graph.checkpointer is not None:
         snapshot = await graph.aget_state(run_config)
         if snapshot.interrupts:
@@ -163,7 +177,7 @@ async def _build_sync_response(
                 route=str(result.get("route") or "direct"),
                 status="interrupted",
                 citations=serialize_citations(result.get("citations")),
-                artifacts=serialize_artifacts(result.get("artifacts")),
+                artifacts=artifacts,
                 interrupts=[item.value for item in snapshot.interrupts],
                 usage=usage,
                 stateless=stateless,
@@ -175,7 +189,7 @@ async def _build_sync_response(
         route=str(result.get("route") or "direct"),
         status="completed",
         citations=serialize_citations(result.get("citations")),
-        artifacts=serialize_artifacts(result.get("artifacts")),
+        artifacts=artifacts,
         usage=usage,
         stateless=stateless,
         trace_id=trace_id,
@@ -219,6 +233,7 @@ async def chat_stream(
             space_id=space.space_id,
             delegation_token=space.delegation_token.get_secret_value(),
             tool_metrics=raw_request.app.state.tool_metrics,
+            mutation_journal=getattr(raw_request.app.state, "mutation_journal", None),
         ),
         media_type="text/event-stream",
         headers=headers,
@@ -248,10 +263,12 @@ async def chat_sync(
     is_stateless = _is_stateless_request(payload)
     _apply_headers(response, rate_limit_headers(limit_result))
     graph = _select_graph(raw_request, stateless=is_stateless)
+    journal = getattr(raw_request.app.state, "mutation_journal", None)
     with (
         bind_delegation_token(space.delegation_token.get_secret_value()),
         bind_llm_override(llm_override),
         bind_tool_metrics(raw_request.app.state.tool_metrics),
+        bind_turn_journal(journal, space_id=space.space_id, trace_id=space.trace_id),
     ):
         result = await graph.ainvoke(
             _build_chat_graph_input(payload, space, lc_messages),
@@ -266,6 +283,7 @@ async def chat_sync(
         stateless=is_stateless,
         space_id=space.space_id,
         token_budget=None if llm_override is not None else token_budget,
+        mutation_journal=journal,
     )
 
 
@@ -299,6 +317,7 @@ async def chat_resume_stream(
             space_id=space.space_id,
             delegation_token=space.delegation_token.get_secret_value(),
             tool_metrics=raw_request.app.state.tool_metrics,
+            mutation_journal=getattr(raw_request.app.state, "mutation_journal", None),
         ),
         media_type="text/event-stream",
         headers=headers,
@@ -321,10 +340,12 @@ async def chat_resume_sync(
     )
     _apply_headers(response, rate_limit_headers(limit_result))
     graph: CompiledStateGraph = raw_request.app.state.root_graph
+    journal = getattr(raw_request.app.state, "mutation_journal", None)
     with (
         bind_delegation_token(space.delegation_token.get_secret_value()),
         bind_llm_override(llm_override),
         bind_tool_metrics(raw_request.app.state.tool_metrics),
+        bind_turn_journal(journal, space_id=space.space_id, trace_id=space.trace_id),
     ):
         result = await graph.ainvoke(Command(resume=payload.decision), config=run_config)
     return await _build_sync_response(
@@ -336,4 +357,5 @@ async def chat_resume_sync(
         stateless=False,
         space_id=space.space_id,
         token_budget=None if llm_override is not None else token_budget,
+        mutation_journal=journal,
     )

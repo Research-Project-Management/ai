@@ -9,6 +9,7 @@ from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.store.base import BaseStore
 from pydantic import SecretStr
 
+from ai.agents.rag.ingestion.jobs import IngestionJobRunner
 from ai.agents.rag.ingestion.pipeline import IngestionPipeline
 from ai.agents.rag.retrieval.engine import RetrievalEngine
 from ai.api.schemas import ChatRequest, ResumeRequest
@@ -19,6 +20,7 @@ from ai.shared.contracts.health import HealthProbe
 from ai.shared.contracts.knowledge import KnowledgeStore
 from ai.shared.contracts.rate_limit import RateLimiter, RateLimitResult
 from ai.shared.contracts.run_control import FeedbackSink, RunCancellationRegistry
+from ai.shared.resilience.mutations import TurnMutationJournal
 from ai.shared.resilience.observability import TokenBudget, TokenQuotaStatus
 
 
@@ -62,6 +64,11 @@ def get_feedback_sink(request: Request) -> FeedbackSink:
     return request.app.state.feedback_sink
 
 
+def get_mutation_journal(request: Request) -> TurnMutationJournal:
+    """Inject per-turn mutation journal from app state."""
+    return request.app.state.mutation_journal
+
+
 def get_input_guards(request: Request) -> tuple[InputGuard, ...]:
     """Inject inbound message validation guards from app state."""
     return request.app.state.input_guards
@@ -80,6 +87,11 @@ def get_checkpointer(request: Request) -> BaseCheckpointSaver:
 def get_ingestion_pipeline(request: Request) -> IngestionPipeline:
     """Inject write-side RAG IngestionPipeline from app state."""
     return request.app.state.ingestion_pipeline
+
+
+def get_ingestion_job_runner(request: Request) -> IngestionJobRunner:
+    """Inject bounded async IngestionJobRunner from app state."""
+    return request.app.state.ingestion_job_runner
 
 
 def get_retrieval_engine(request: Request) -> RetrievalEngine:
