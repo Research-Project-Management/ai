@@ -1,16 +1,22 @@
 """LLM-backed Supervisor planner and internal streaming helpers."""
 
+from __future__ import annotations
+
+from collections.abc import Mapping, Sequence
+from typing import Any
 
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
 
 from ai.orchestrator.context_policy import SlidingWindowContextPolicy
 from ai.orchestrator.contracts import (
+    AgentOutput,
     AgentRegistry,
     AgentTaskAssignment,
     ContextWindowPolicy,
     RoutingDecision,
 )
+from ai.orchestrator.policies import DEFAULT_POLICIES, PolicyChain, PolicyContext
 from ai.orchestrator.prompts import build_supervisor_prompt
 from ai.orchestrator.state import RootState
 from ai.shared.context.contracts import extract_viewport_focus
@@ -19,6 +25,25 @@ from ai.shared.llm.factory import ChatRunnable
 from ai.shared.llm.nostream import with_nostream
 from ai.shared.llm.output import extract_text, parse_json_object
 from ai.shared.resilience.cache import ToolCache, build_cache_key
+
+
+def enforce_routing_invariants(
+    decision: RoutingDecision,
+    *,
+    query: str,
+    request_context: Mapping[str, Any] | None,
+    prior_outputs: Sequence[AgentOutput],
+    registry: AgentRegistry,
+    policies: PolicyChain = DEFAULT_POLICIES,
+) -> RoutingDecision:
+    """Enforce deterministic routing invariant policies before returning a Supervisor plan."""
+    ctx = PolicyContext(
+        query=query,
+        request_context=request_context,
+        prior_outputs=prior_outputs,
+        registry=registry,
+    )
+    return policies.apply(decision, ctx)
 
 
 def parse_routing_decision(
@@ -72,7 +97,7 @@ def parse_routing_decision(
 
 
 class LLMSupervisorPlanner:
-    """Default RoutePlanner using the configured router ChatRunnable and a ContextWindowPolicy."""
+    """Default RoutePlanner using the configured router ChatRunnable and PolicyChain."""
 
     def __init__(
         self,
@@ -83,15 +108,17 @@ class LLMSupervisorPlanner:
         cache: ToolCache | None = None,
         cache_ttl_seconds: int = 300,
         max_rounds: int = 3,
+        policies: PolicyChain | None = None,
     ) -> None:
         self._router_llm = router_llm
-        self._context_policy: ContextWindowPolicy = (
-            context_policy or SlidingWindowContextPolicy(max_messages=6, max_chars=12_000)
+        self._context_policy: ContextWindowPolicy = context_policy or SlidingWindowContextPolicy(
+            max_messages=6, max_chars=12_000
         )
         self._context_facade = context_facade
         self._cache = cache
         self._cache_ttl = max(30, cache_ttl_seconds)
         self._max_rounds = max_rounds
+        self._policies = policies or DEFAULT_POLICIES
 
     async def plan(
         self,
@@ -120,8 +147,13 @@ class LLMSupervisorPlanner:
             focus = extract_viewport_focus(req_ctx)
             title = str(req_ctx.get("project_title") or req_ctx.get("title") or "").strip()
             venue = str(req_ctx.get("target_venue") or req_ctx.get("venue") or "").strip() or None
-            deadline = str(req_ctx.get("target_deadline") or req_ctx.get("deadline") or "").strip() or None
-            hypothesis = str(req_ctx.get("primary_hypothesis") or req_ctx.get("hypothesis") or "").strip() or None
+            deadline = (
+                str(req_ctx.get("target_deadline") or req_ctx.get("deadline") or "").strip() or None
+            )
+            hypothesis = (
+                str(req_ctx.get("primary_hypothesis") or req_ctx.get("hypothesis") or "").strip()
+                or None
+            )
 
             envelope = self._context_facade.assemble_context(
                 focus,
@@ -145,19 +177,25 @@ class LLMSupervisorPlanner:
 
         cache_key = ""
         if self._cache is not None and round_count == 1 and not prior_outputs:
-            serialized_recent = [
-                f"{msg.type}:{extract_text(msg.content)}" for msg in recent
-            ]
+            serialized_recent = [f"{msg.type}:{extract_text(msg.content)}" for msg in recent]
             cache_key = build_cache_key(
                 "router_plan",
                 {"sys": system_prompt, "msgs": serialized_recent},
             )
             cached = await self._cache.get(cache_key)
             if isinstance(cached, dict) and "raw_text" in cached:
-                return parse_routing_decision(
+                cached_decision = parse_routing_decision(
                     str(cached["raw_text"]),
                     registry,
                     has_prior_outputs=False,
+                )
+                return enforce_routing_invariants(
+                    cached_decision,
+                    query=latest_human,
+                    request_context=req_ctx,
+                    prior_outputs=prior_outputs,
+                    registry=registry,
+                    policies=self._policies,
                 )
 
         prompt_messages: list[BaseMessage] = [SystemMessage(content=system_prompt), *recent]
@@ -168,10 +206,21 @@ class LLMSupervisorPlanner:
             registry,
             has_prior_outputs=bool(prior_outputs),
         )
-        if self._cache is not None and cache_key and not decision.reasoning.startswith("fallback to"):
+        if (
+            self._cache is not None
+            and cache_key
+            and not decision.reasoning.startswith("fallback to")
+        ):
             await self._cache.set(
                 cache_key,
                 {"raw_text": raw_text},
                 ttl_seconds=self._cache_ttl,
             )
-        return decision
+        return enforce_routing_invariants(
+            decision,
+            query=latest_human,
+            request_context=req_ctx,
+            prior_outputs=prior_outputs,
+            registry=registry,
+            policies=self._policies,
+        )

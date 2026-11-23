@@ -62,9 +62,7 @@ class AgentSpec(BaseModel):
         if stripped == "direct" or stripped in RESERVED_NODE_NAMES:
             raise ValueError(f"Agent name '{stripped}' is reserved")
         if not _AGENT_NAME_RE.match(stripped):
-            raise ValueError(
-                f"Agent name '{stripped}' must match ^[a-z][a-z0-9_]{{1,48}}$"
-            )
+            raise ValueError(f"Agent name '{stripped}' must match ^[a-z][a-z0-9_]{{1,48}}$")
         return stripped
 
     @field_validator("handler")
