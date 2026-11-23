@@ -59,7 +59,9 @@ from ai.shared.contracts.auth import get_delegation_token
 from ai.shared.llm.factory import ChatRunnable
 
 
-def _test_settings(*, hitl_policy: Literal["destructive", "all_writes", "readonly"] = "destructive") -> Settings:
+def _test_settings(
+    *, hitl_policy: Literal["destructive", "all_writes", "readonly"] = "destructive"
+) -> Settings:
     return Settings(
         server=ServerConfig(
             app_env=AppEnvironment.TEST,
@@ -163,8 +165,12 @@ class InMemoryFakeProjectGateway:
             WorkflowState(id="st-done", name="Done", group="completed", sequence=3),
         ]
         self.members = [
-            ProjectMember(user_id="usr-minh", name="Minh Nguyen", email="minh@flux.dev", role="owner"),
-            ProjectMember(user_id="usr-an", name="An Tran", email="an@flux.dev", role="contributor"),
+            ProjectMember(
+                user_id="usr-minh", name="Minh Nguyen", email="minh@flux.dev", role="owner"
+            ),
+            ProjectMember(
+                user_id="usr-an", name="An Tran", email="an@flux.dev", role="contributor"
+            ),
         ]
         self.labels = [
             ProjectLabel(id="lbl-bug", name="Bug", color="#ef4444"),
@@ -455,9 +461,7 @@ class InMemoryFakeProjectGateway:
         self._record("get_my_work_items", project_id=project_id, relation=relation)
         del scope
         return [
-            w
-            for w in self.work_item_rows.values()
-            if not project_id or w.project_id == project_id
+            w for w in self.work_item_rows.values() if not project_id or w.project_id == project_id
         ]
 
     async def get_work_item(self, scope: ProjectScope, work_item_id: str) -> WorkItemSummary:
@@ -534,9 +538,17 @@ class InMemoryFakeProjectGateway:
             update={
                 **({"title": title} if title is not None else {}),
                 **({"description": description} if description is not None else {}),
-                **({"column_id": st.id, "state_name": st.name, "state_group": st.group} if st else {}),
+                **(
+                    {"column_id": st.id, "state_name": st.name, "state_group": st.group}
+                    if st
+                    else {}
+                ),
                 **({"assignee_id": None, "assignee_name": ""} if clear_assignee else {}),
-                **({"assignee_id": assignee_id} if assignee_id is not None and not clear_assignee else {}),
+                **(
+                    {"assignee_id": assignee_id}
+                    if assignee_id is not None and not clear_assignee
+                    else {}
+                ),
                 **({"priority": priority} if priority is not None else {}),
                 **({"due_date": due_date} if due_date is not None else {}),
                 **({"start_date": start_date} if start_date is not None else {}),
@@ -554,9 +566,7 @@ class InMemoryFakeProjectGateway:
         self.work_item_rows.pop(work_item_id, None)
         return {"message": "Work item deleted"}
 
-    async def archive_work_item(
-        self, scope: ProjectScope, work_item_id: str
-    ) -> WorkItemSummary:
+    async def archive_work_item(self, scope: ProjectScope, work_item_id: str) -> WorkItemSummary:
         self._record("archive_work_item", work_item_id=work_item_id)
         existing = await self.get_work_item(scope, work_item_id)
         self.archived_ids.append(existing.id)
@@ -576,9 +586,7 @@ class InMemoryFakeProjectGateway:
         del scope
         return {"newAssigneeId": assignee_id}
 
-    async def list_comments(
-        self, scope: ProjectScope, work_item_id: str
-    ) -> list[WorkItemComment]:
+    async def list_comments(self, scope: ProjectScope, work_item_id: str) -> list[WorkItemComment]:
         self._record("list_comments", work_item_id=work_item_id)
         del scope
         return list(self.comments.get(work_item_id, []))
@@ -603,9 +611,7 @@ class InMemoryFakeProjectGateway:
         self.comments.setdefault(work_item_id, []).append(comment)
         return comment
 
-    async def get_project_analytics(
-        self, scope: ProjectScope, project_id: str
-    ) -> ProjectAnalytics:
+    async def get_project_analytics(self, scope: ProjectScope, project_id: str) -> ProjectAnalytics:
         self._record("get_project_analytics", project_id=project_id)
         del scope
         return ProjectAnalytics(
@@ -647,7 +653,9 @@ def _parse_sse(raw_body: str) -> list[tuple[str, dict[str, Any]]]:
 def test_project_entity_resolution_chain_exact_fuzzy_and_ambiguity() -> None:
     members = [
         ProjectMember(user_id="u1", name="Minh Nguyen", email="minh.nguyen@flux.dev", role="owner"),
-        ProjectMember(user_id="u2", name="Minh Tran", email="minh.tran@flux.dev", role="contributor"),
+        ProjectMember(
+            user_id="u2", name="Minh Tran", email="minh.tran@flux.dev", role="contributor"
+        ),
         ProjectMember(user_id="u3", name="Alice Chen", email="alice@flux.dev", role="reviewer"),
     ]
     states = [

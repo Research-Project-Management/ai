@@ -23,9 +23,10 @@ from ai.orchestrator.contracts import (
     AgentSpec,
     CitationItem,
     DraftOutput,
+    RoutingDecision,
 )
 from ai.orchestrator.graph import build_root_graph
-from ai.orchestrator.planner import parse_routing_decision
+from ai.orchestrator.planner import enforce_routing_invariants, parse_routing_decision
 from ai.orchestrator.prompts import build_supervisor_prompt
 from ai.orchestrator.state import RootState
 from ai.shared.config.database import DatabaseConfig, PostgresConfig, QdrantConfig, RedisConfig
@@ -603,9 +604,100 @@ def test_supervisor_prompt_surfaces_context_and_planner_strips_think_blocks() ->
         ]
     )
     decision = parse_routing_decision(
-        '<think>Analyze query and context first.</think>\n'
+        "<think>Analyze query and context first.</think>\n"
         '{"mode": "delegate", "targets": [{"agent": "rag_agent", "instruction": "Inspect doc"}]}',
         registry,
     )
     assert decision.mode == "delegate"
     assert [t.agent for t in decision.targets] == ["rag_agent"]
+
+
+def test_enforce_routing_invariants_requires_reading_attached_sources_first() -> None:
+    from ai.orchestrator.contracts import AgentTaskAssignment
+
+    async def _noop(state: RootState, config: RunnableConfig) -> str:
+        del state, config
+        return "ok"
+
+    registry = AgentRegistry(
+        [
+            AgentSpec(name="rag_agent", description="Docs", handler=_noop),
+            AgentSpec(name="library_agent", description="Library", handler=_noop),
+            AgentSpec(name="project_agent", description="Projects", handler=_noop),
+            AgentSpec(name="editor_agent", description="Editor", handler=_noop),
+        ]
+    )
+
+    indexed_ctx = {
+        "attached_sources": [
+            {
+                "kind": "paper",
+                "title": "MeshGraphNets",
+                "item_id": "item-1",
+                "indexed": True,
+            }
+        ]
+    }
+    meta_only_ctx = {
+        "attached_sources": [
+            {
+                "kind": "library",
+                "title": "MeshGraphNets",
+                "item_id": "item-1",
+                "indexed": False,
+                "has_pdf": False,
+            }
+        ]
+    }
+
+    # 1. Attached PDF/indexed paper + project_agent alone on round 1 -> rag_agent + needs_followup=True
+    proj_decision = RoutingDecision(
+        mode="delegate",
+        targets=(AgentTaskAssignment(agent="project_agent", instruction="Create 5 tasks"),),
+        needs_followup=False,
+    )
+    enforced_1 = enforce_routing_invariants(
+        proj_decision,
+        query="tạo 5 tasks từ tài liệu trên",
+        request_context=indexed_ctx,
+        prior_outputs=(),
+        registry=registry,
+    )
+    assert enforced_1.mode == "delegate"
+    assert [t.agent for t in enforced_1.targets] == ["rag_agent"]
+    assert enforced_1.needs_followup is True
+    assert "MeshGraphNets" in enforced_1.targets[0].instruction
+
+    # 2. Attached metadata-only paper + direct on round 1 -> library_agent (with item_id) + needs_followup=False
+    direct_decision = RoutingDecision(mode="direct", reasoning="missing content")
+    enforced_2 = enforce_routing_invariants(
+        direct_decision,
+        query="tạo 5 tasks từ tài liệu trên",
+        request_context=meta_only_ctx,
+        prior_outputs=(),
+        registry=registry,
+    )
+    assert enforced_2.mode == "delegate"
+    assert [t.agent for t in enforced_2.targets] == ["library_agent"]
+    assert enforced_2.needs_followup is False
+    assert "item-1" in enforced_2.targets[0].instruction
+
+    # 3. Round 2 (prior_outputs non-empty) + project_agent -> untouched
+    enforced_3 = enforce_routing_invariants(
+        proj_decision,
+        query="tạo 5 tasks từ tài liệu trên",
+        request_context=indexed_ctx,
+        prior_outputs=(AgentOutput(agent="rag_agent", content="Summary of paper"),),
+        registry=registry,
+    )
+    assert enforced_3 == proj_decision
+
+    # 4. No attached sources -> untouched
+    enforced_4 = enforce_routing_invariants(
+        proj_decision,
+        query="create 5 tasks",
+        request_context={"project_id": "p-1"},
+        prior_outputs=(),
+        registry=registry,
+    )
+    assert enforced_4 == proj_decision

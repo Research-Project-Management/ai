@@ -48,9 +48,7 @@ async def test_circuit_breaker_state_transitions_and_recovery(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     now = {"t": 100.0}
-    monkeypatch.setattr(
-        "ai.shared.resilience.circuit_breaker.time.monotonic", lambda: now["t"]
-    )
+    monkeypatch.setattr("ai.shared.resilience.circuit_breaker.time.monotonic", lambda: now["t"])
 
     breaker = CircuitBreaker(
         "github_api",
@@ -160,9 +158,7 @@ async def test_execute_tool_safely_with_circuit_breaker_and_cache(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     now = {"t": 50.0}
-    monkeypatch.setattr(
-        "ai.shared.resilience.circuit_breaker.time.monotonic", lambda: now["t"]
-    )
+    monkeypatch.setattr("ai.shared.resilience.circuit_breaker.time.monotonic", lambda: now["t"])
     monkeypatch.setattr("ai.shared.resilience.cache.time.monotonic", lambda: now["t"])
 
     cache = InMemoryToolCache()
@@ -323,9 +319,7 @@ async def test_github_artifact_client_cache_and_circuit_breaker() -> None:
         http_calls["mode"] = "404"
         for idx in range(3):
             with pytest.raises(GitHubArtifactError) as err_404:
-                await gh.fetch_artifact(
-                    repo="org/repo", path=f"missing-{idx}.csv", ref="main"
-                )
+                await gh.fetch_artifact(repo="org/repo", path=f"missing-{idx}.csv", ref="main")
             assert err_404.value.status_code == 404
         assert breaker.state == CircuitState.CLOSED
         calls_before_500 = http_calls["count"]
@@ -334,9 +328,7 @@ async def test_github_artifact_client_cache_and_circuit_breaker() -> None:
         http_calls["mode"] = "500"
         for idx in range(2):
             with pytest.raises(GitHubArtifactError) as err_500:
-                await gh.fetch_artifact(
-                    repo="org/repo", path=f"broken-{idx}.csv", ref="main"
-                )
+                await gh.fetch_artifact(repo="org/repo", path=f"broken-{idx}.csv", ref="main")
             assert err_500.value.status_code == 500
         assert breaker.state == CircuitState.OPEN
         calls_at_trip = http_calls["count"]
@@ -416,6 +408,59 @@ def test_llm_config_extra_api_keys_and_fallback_chain() -> None:
         assert getattr(active_agent, "model_name", "") == "claude-3-7-sonnet"
         # Router role always stays on platform model for fast control-plane routing
         assert active_router is r0
+
+
+def test_build_chat_model_per_role_base_url_and_api_key() -> None:
+    cfg = LLMConfig(
+        base_url="https://primary.example/v1",
+        api_key=SecretStr("sk-default-key"),
+        model="model-default",
+        router_model="model-router",
+        router_base_url="https://router.example/v1",
+        router_api_key=SecretStr("sk-router-key"),
+        agent_model="model-agent",
+        agent_api_key=SecretStr("sk-agent-key"),
+        fallback_base_url="https://fallback.example/v1",
+        fallback_api_key=SecretStr("sk-fallback-key"),
+        fallback_model="model-fallback",
+    )
+
+    default_client = build_chat_model(cfg, role="default")
+    router_client = build_chat_model(cfg, role="router")
+    agent_client = build_chat_model(cfg, role="agent")
+
+    for client, expected_key, expected_base, expected_model in (
+        (default_client, "sk-default-key", "https://primary.example/v1", "model-default"),
+        (router_client, "sk-router-key", "https://router.example/v1", "model-router"),
+        (agent_client, "sk-agent-key", "https://primary.example/v1", "model-agent"),
+    ):
+        assert isinstance(client, RunnableWithFallbacks)
+        primary = client.runnable
+        key_val = getattr(primary, "openai_api_key", None)
+        assert isinstance(key_val, SecretStr) and key_val.get_secret_value() == expected_key
+        assert getattr(primary, "openai_api_base", None) == expected_base
+        assert getattr(primary, "model_name", None) == expected_model
+        assert len(client.fallbacks) == 1
+        fb_key = getattr(client.fallbacks[0], "openai_api_key", None)
+        assert isinstance(fb_key, SecretStr) and fb_key.get_secret_value() == "sk-fallback-key"
+
+    # When role keys/URLs are unset, all roles fall back to primary pool and base URL
+    shared_cfg = LLMConfig(
+        base_url="https://shared.example/v1",
+        api_key=SecretStr("sk-shared-key"),
+        extra_api_keys=SecretStr(""),
+        model="model-shared",
+        router_model="model-shared-router",
+        router_base_url="",
+        router_api_key=SecretStr(""),
+        agent_base_url="",
+        agent_api_key=SecretStr(""),
+        fallback_api_key=SecretStr(""),
+    )
+    shared_router = build_chat_model(shared_cfg, role="router")
+    shared_key = getattr(shared_router, "openai_api_key", None)
+    assert isinstance(shared_key, SecretStr) and shared_key.get_secret_value() == "sk-shared-key"
+    assert getattr(shared_router, "openai_api_base", None) == "https://shared.example/v1"
 
 
 def test_prompts_preserve_static_prefix_across_steps_for_kv_cache() -> None:

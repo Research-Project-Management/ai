@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from typing import cast
+from typing import Any, cast
 
 import pytest
 from fastapi.testclient import TestClient
 from langchain_core.language_models import LanguageModelInput
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, AIMessageChunk
 from langchain_core.runnables import RunnableLambda
 from pydantic import SecretStr
 from redis.asyncio import Redis
@@ -20,13 +20,16 @@ from ai.shared.config.llm import LLMConfig
 from ai.shared.config.server import AppEnvironment, ServerConfig
 from ai.shared.config.settings import Settings
 from ai.shared.contracts.run_control import RunUsage
+from ai.shared.llm.factory import ChatRunnable, ContextAwareChatRunnable
 from ai.shared.resilience.observability import (
     InMemoryTokenBudget,
+    LLMCallMetrics,
     RedisTokenBudget,
     TokenBudget,
     ToolExecutionMetrics,
     create_token_budget,
 )
+from ai.shared.resilience.prometheus import render_prometheus_metrics
 
 
 def _test_settings() -> Settings:
@@ -75,9 +78,7 @@ async def test_in_memory_token_budget_cost_quota_and_sliding_window(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     now = {"t": 1000.0}
-    monkeypatch.setattr(
-        "ai.shared.resilience.observability.time.monotonic", lambda: now["t"]
-    )
+    monkeypatch.setattr("ai.shared.resilience.observability.time.monotonic", lambda: now["t"])
 
     guard = InMemoryTokenBudget(
         max_tokens_per_window=1000,
@@ -243,7 +244,9 @@ async def test_redis_token_budget_adapter_and_fail_open() -> None:
     fake.fail = True
     assert (await budget.check("space-r1")).allowed is True
     assert (
-        await budget.record("space-r1", RunUsage(input_tokens=10, output_tokens=10, total_tokens=20))
+        await budget.record(
+            "space-r1", RunUsage(input_tokens=10, output_tokens=10, total_tokens=20)
+        )
     ).allowed is True
     assert (await budget.snapshot())["active_scopes"] == 0
 
@@ -261,35 +264,61 @@ async def test_resilience_health_endpoint_auth_and_payload() -> None:
         unauth = client.get("/health/resilience")
         assert unauth.status_code == 401
 
-        bad_auth = client.get(
-            "/health/resilience", headers={"X-Internal-Key": "wrong-key"}
-        )
+        bad_auth = client.get("/health/resilience", headers={"X-Internal-Key": "wrong-key"})
         assert bad_auth.status_code == 401
 
         # 2. Mutate wired state to confirm live state reflection
         app.state.tool_metrics.record_call("github_fetch", latency_ms=42.5, ok=True)
+        app.state.llm_metrics.record_call(
+            "agent",
+            "deepseek-v3.2",
+            latency_ms=250.0,
+            ok=True,
+            input_tokens=100,
+            output_tokens=50,
+        )
         await app.state.token_budget.record(
             "space-live", RunUsage(input_tokens=500, output_tokens=100, total_tokens=600)
         )
 
         # 3. Valid X-Internal-Key -> 200 with expected schema
-        res = client.get(
-            "/health/resilience", headers={"X-Internal-Key": "obs-test-key"}
-        )
+        res = client.get("/health/resilience", headers={"X-Internal-Key": "obs-test-key"})
         assert res.status_code == 200
         body = res.json()
         assert set(body.keys()) == {
             "circuit_breakers",
             "tool_metrics",
+            "llm_metrics",
+            "ingestion_queue",
             "token_budget",
             "provenance",
         }
         assert body["circuit_breakers"].get("github") == "closed"
         assert body["tool_metrics"]["github_fetch"]["calls"] == 1
+        assert body["llm_metrics"]["agent:deepseek-v3.2"]["calls"] == 1
+        assert body["ingestion_queue"]["max_queue_size"] >= 1
         assert body["token_budget"]["total_tokens"] == 600
         assert "total_nodes" in body["provenance"]
 
-        # 4. Existing /health contract remains unchanged
+        # 4. Prometheus /metrics requires auth and emits 0.0.4 text format
+        metrics_unauth = client.get("/metrics")
+        assert metrics_unauth.status_code == 401
+
+        metrics_res = client.get("/metrics", headers={"X-Internal-Key": "obs-test-key"})
+        assert metrics_res.status_code == 200
+        assert metrics_res.headers["content-type"].startswith("text/plain; version=0.0.4")
+        metrics_text = metrics_res.text
+        assert 'ai_tool_calls_total{tool="github_fetch"} 1' in metrics_text
+        assert 'ai_llm_calls_total{role="agent",model="deepseek-v3.2"} 1' in metrics_text
+        assert (
+            'ai_llm_tokens_total{role="agent",model="deepseek-v3.2",direction="in"} 100'
+            in metrics_text
+        )
+        assert 'ai_circuit_breaker_state{service="github"} 0' in metrics_text
+        assert "ai_ingestion_queue_active 0" in metrics_text
+        assert "ai_ingestion_queue_capacity " in metrics_text
+
+        # 5. Existing /health contract remains unchanged
         base_health = client.get("/health")
         assert base_health.status_code == 200
         assert set(base_health.json().keys()) == {"status", "app_env", "components"}
@@ -370,3 +399,171 @@ async def test_chat_enforces_and_records_token_budget() -> None:
             },
         )
         assert byok_ok.status_code == 200
+
+
+def test_llm_call_metrics_counters_and_avg_latency() -> None:
+    metrics = LLMCallMetrics()
+    assert metrics.snapshot() == {}
+
+    metrics.record_call(
+        "agent",
+        "deepseek-v3.2",
+        latency_ms=120.0,
+        ok=True,
+        input_tokens=300,
+        output_tokens=150,
+    )
+    metrics.record_call(
+        "agent",
+        "deepseek-v3.2",
+        latency_ms=80.0,
+        ok=False,
+        input_tokens=100,
+        output_tokens=0,
+    )
+    metrics.record_call(
+        "",
+        "",
+        latency_ms=-5.0,
+        ok=True,
+        input_tokens=-10,
+        output_tokens=20,
+    )
+
+    snap = metrics.snapshot()
+    assert snap["agent:deepseek-v3.2"] == {
+        "role": "agent",
+        "model": "deepseek-v3.2",
+        "calls": 2,
+        "errors": 1,
+        "input_tokens": 400,
+        "output_tokens": 150,
+        "total_latency_ms": 200.0,
+        "avg_latency_ms": 100.0,
+    }
+    assert snap["default:unknown"] == {
+        "role": "default",
+        "model": "unknown",
+        "calls": 1,
+        "errors": 0,
+        "input_tokens": 0,
+        "output_tokens": 20,
+        "total_latency_ms": 0.0,
+        "avg_latency_ms": 0.0,
+    }
+
+
+def test_render_prometheus_metrics_escapes_labels_and_formats_states() -> None:
+    text = render_prometheus_metrics(
+        tool_metrics={
+            'weird"tool\\n\n': {
+                "calls": 2,
+                "errors": 1,
+                "cache_hits": 1,
+                "total_latency_ms": 15.5,
+            }
+        },
+        llm_metrics={
+            "router:deepseek-v4-flash": {
+                "role": "router",
+                "model": "deepseek-v4-flash",
+                "calls": 3,
+                "errors": 0,
+                "input_tokens": 250,
+                "output_tokens": 90,
+                "total_latency_ms": 420.0,
+            }
+        },
+        circuit_breakers={
+            "qdrant": "closed",
+            "github": "half_open",
+            "web": "open",
+        },
+        ingestion_queue={"active_jobs": 2, "max_queue_size": 50},
+    )
+
+    assert 'ai_tool_calls_total{tool="weird\\"tool\\\\n\\n"} 2' in text
+    assert 'ai_llm_calls_total{role="router",model="deepseek-v4-flash"} 3' in text
+    assert 'ai_llm_tokens_total{role="router",model="deepseek-v4-flash",direction="in"} 250' in text
+    assert 'ai_llm_tokens_total{role="router",model="deepseek-v4-flash",direction="out"} 90' in text
+    assert 'ai_circuit_breaker_state{service="qdrant"} 0' in text
+    assert 'ai_circuit_breaker_state{service="github"} 1' in text
+    assert 'ai_circuit_breaker_state{service="web"} 2' in text
+    assert "ai_ingestion_queue_active 2" in text
+    assert "ai_ingestion_queue_capacity 50" in text
+    assert text.endswith("\n")
+
+
+async def test_context_aware_runnable_records_ainvoke_astream_and_errors() -> None:
+    class _StubTarget:
+        def __init__(self, *, fail: bool = False) -> None:
+            self._fail = fail
+
+        async def ainvoke(self, _input: LanguageModelInput, **_kwargs: Any) -> AIMessage:
+            if self._fail:
+                raise RuntimeError("upstream 503")
+            return AIMessage(
+                content="ok",
+                usage_metadata={"input_tokens": 20, "output_tokens": 10, "total_tokens": 30},
+                response_metadata={"model_name": "gemini-2.5-flash"},
+            )
+
+        async def astream(self, _input: LanguageModelInput, **_kwargs: Any) -> Any:
+            yield AIMessageChunk(content="hi ")
+            yield AIMessageChunk(
+                content="there",
+                usage_metadata={"input_tokens": 15, "output_tokens": 8, "total_tokens": 23},
+                response_metadata={"model_name": "deepseek-v3.2"},
+            )
+
+    cfg = LLMConfig(
+        api_key=SecretStr("sk-test"),
+        model="gemini-2.5-flash",
+        router_model="deepseek-v4-flash",
+        agent_model="deepseek-v3.2",
+        router_api_key=SecretStr(""),
+        agent_api_key=SecretStr(""),
+    )
+    metrics = LLMCallMetrics()
+
+    default_proxy = ContextAwareChatRunnable(
+        cast(ChatRunnable, _StubTarget()),
+        config=cfg,
+        role="default",
+        metrics=metrics,
+    )
+    res = await default_proxy.ainvoke("ping")
+    assert res.content == "ok"
+
+    agent_proxy = ContextAwareChatRunnable(
+        cast(ChatRunnable, _StubTarget()),
+        config=cfg,
+        role="agent",
+        metrics=metrics,
+    )
+    chunks = [chunk.content async for chunk in agent_proxy.astream("ping")]
+    assert chunks == ["hi ", "there"]
+
+    router_proxy = ContextAwareChatRunnable(
+        cast(ChatRunnable, _StubTarget(fail=True)),
+        config=cfg,
+        role="router",
+        metrics=metrics,
+    )
+    with pytest.raises(RuntimeError, match="upstream 503"):
+        await router_proxy.ainvoke("route")
+
+    snap = metrics.snapshot()
+    assert snap["default:gemini-2.5-flash"]["calls"] == 1
+    assert snap["default:gemini-2.5-flash"]["errors"] == 0
+    assert snap["default:gemini-2.5-flash"]["input_tokens"] == 20
+    assert snap["default:gemini-2.5-flash"]["output_tokens"] == 10
+
+    assert snap["agent:deepseek-v3.2"]["calls"] == 1
+    assert snap["agent:deepseek-v3.2"]["errors"] == 0
+    assert snap["agent:deepseek-v3.2"]["input_tokens"] == 15
+    assert snap["agent:deepseek-v3.2"]["output_tokens"] == 8
+
+    assert snap["router:deepseek-v4-flash"]["calls"] == 1
+    assert snap["router:deepseek-v4-flash"]["errors"] == 1
+    assert snap["router:deepseek-v4-flash"]["input_tokens"] == 0

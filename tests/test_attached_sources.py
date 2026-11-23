@@ -392,7 +392,9 @@ async def test_library_agent_uses_attached_item_ids_directly() -> None:
             read_status: str | None = None,
             limit: int = 20,
         ) -> dict[str, Any]:
-            raise AssertionError(f"search_items should not be called when item_id is attached: {query}")
+            raise AssertionError(
+                f"search_items should not be called when item_id is attached: {query}"
+            )
 
         async def get_overview(self, scope: LibraryScope) -> LibraryOverview:
             return LibraryOverview()
@@ -482,7 +484,9 @@ async def test_library_agent_uses_attached_item_ids_directly() -> None:
         ) -> dict[str, Any]:
             return {}
 
-        async def trash_items(self, scope: LibraryScope, *, item_ids: Sequence[str]) -> dict[str, Any]:
+        async def trash_items(
+            self, scope: LibraryScope, *, item_ids: Sequence[str]
+        ) -> dict[str, Any]:
             return {}
 
         async def merge_duplicates(
@@ -501,7 +505,11 @@ async def test_library_agent_uses_attached_item_ids_directly() -> None:
                 {
                     "action": "call_tools",
                     "tool_calls": [
-                        {"tool": "get_item", "args": {"item_id": "item-direct-7"}, "reason": "Read attached paper"}
+                        {
+                            "tool": "get_item",
+                            "args": {"item_id": "item-direct-7"},
+                            "reason": "Read attached paper",
+                        }
                     ],
                 }
             ),
@@ -594,6 +602,4 @@ def test_rag_slice_isolation_and_single_root_init() -> None:
             if isinstance(node, ast.ImportFrom) and node.module:
                 assert not node.module.startswith("ai.agents.library"), py_file
                 assert not node.module.startswith("ai.agents.web_search"), py_file
-    assert [p.as_posix() for p in Path("src/ai").rglob("__init__.py")] == [
-        "src/ai/__init__.py"
-    ]
+    assert [p.as_posix() for p in Path("src/ai").rglob("__init__.py")] == ["src/ai/__init__.py"]

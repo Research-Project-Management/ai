@@ -113,9 +113,7 @@ def test_provenance_graph_k_hop_traversal() -> None:
     assert two_hop_ids == {"task-flux-18", "page-eval", "paper-vaswani"}
 
     # Domain filtering
-    gov_only = graph.get_k_hop_subgraph(
-        "run-exp-04", k=2, domain_filter=[EntityDomain.GOVERNANCE]
-    )
+    gov_only = graph.get_k_hop_subgraph("run-exp-04", k=2, domain_filter=[EntityDomain.GOVERNANCE])
     assert [n.id for n in gov_only] == ["task-flux-18"]
 
 
@@ -207,7 +205,11 @@ def test_prompt_envelope_builder_structure() -> None:
     assert envelope.total_tokens > 0
 
     full = envelope.full_prompt
-    assert full.index("FluxKV Compression") < full.index("Run 1") < full.index("Write the next subsection")
+    assert (
+        full.index("FluxKV Compression")
+        < full.index("Run 1")
+        < full.index("Write the next subsection")
+    )
 
 
 def test_scientific_audit_rules() -> None:
@@ -294,7 +296,9 @@ def test_extract_viewport_focus_all_views() -> None:
     assert extract_viewport_focus({}).view == "fullscreen_chat"
 
     # 2. Editor view inferred from active_file_path or page_id
-    ed_focus = extract_viewport_focus({"active_file_path": "sections/intro.tex", "selection": "text"})
+    ed_focus = extract_viewport_focus(
+        {"active_file_path": "sections/intro.tex", "selection": "text"}
+    )
     assert ed_focus.view == "editor"
     assert ed_focus.target_id == "sections/intro.tex"
     assert ed_focus.selection == "text"
@@ -358,4 +362,3 @@ async def test_supervisor_planner_with_context_facade_integration() -> None:
     assert "Target Venue: NeurIPS 2026" in full_system_prompt
     assert "sections/eval.tex" in full_system_prompt
     assert "Attention Is All You Need" in full_system_prompt
-

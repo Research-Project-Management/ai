@@ -120,11 +120,9 @@ class InMemoryFakeLibraryGateway:
         del scope, year_from, year_to, item_type, collection_id, tag, read_status
         self._record("search_items", query=query)
         q = query.strip().lower()
-        matched = [
-            item
-            for item in self.items.values()
-            if not q or q in item["title"].lower()
-        ][:limit]
+        matched = [item for item in self.items.values() if not q or q in item["title"].lower()][
+            :limit
+        ]
         return {"items": matched, "returned_count": len(matched), "total_count": len(matched)}
 
     async def get_overview(self, scope: LibraryScope) -> LibraryOverview:
@@ -143,7 +141,9 @@ class InMemoryFakeLibraryGateway:
         del scope, include_notes, include_relations
         self._record("get_item", item_id=item_id)
         item = self.items[item_id]
-        return ItemDetail(id=item["id"], title=item["title"], year=item["year"], venue=item["venue"])
+        return ItemDetail(
+            id=item["id"], title=item["title"], year=item["year"], venue=item["venue"]
+        )
 
     async def audit_health(
         self,
@@ -164,10 +164,19 @@ class InMemoryFakeLibraryGateway:
         export_format: str | None = None,
     ) -> dict[str, Any]:
         del scope
-        self._record("cite_items", item_ids=list(item_ids), style=style, export_format=export_format)
+        self._record(
+            "cite_items", item_ids=list(item_ids), style=style, export_format=export_format
+        )
         if export_format == "bibtex":
-            return {"format": "bibtex", "content": "@inproceedings{vaswani2017attention, title={Attention Is All You Need}}"}
-        return {"citations": [{"itemId": i, "bibliography": f"Vaswani et al. (2017) [{i}]"} for i in item_ids]}
+            return {
+                "format": "bibtex",
+                "content": "@inproceedings{vaswani2017attention, title={Attention Is All You Need}}",
+            }
+        return {
+            "citations": [
+                {"itemId": i, "bibliography": f"Vaswani et al. (2017) [{i}]"} for i in item_ids
+            ]
+        }
 
     async def add_paper(
         self,
@@ -179,7 +188,9 @@ class InMemoryFakeLibraryGateway:
         collection_id: str | None = None,
     ) -> dict[str, Any]:
         del scope
-        self._record("add_paper", source=source, identifier=identifier, url=url, collection_id=collection_id)
+        self._record(
+            "add_paper", source=source, identifier=identifier, url=url, collection_id=collection_id
+        )
         return {"runId": "run-add-1", "status": "queued", "identifier": identifier or url}
 
     async def manage_collection(
@@ -194,7 +205,13 @@ class InMemoryFakeLibraryGateway:
         source_collection_id: str | None = None,
     ) -> dict[str, Any]:
         del scope, parent_id, source_collection_id
-        self._record("manage_collection", action=action, collection_id=collection_id, name=name, item_ids=list(item_ids))
+        self._record(
+            "manage_collection",
+            action=action,
+            collection_id=collection_id,
+            name=name,
+            item_ids=list(item_ids),
+        )
         return {"ok": True, "action": action}
 
     async def organize_item(
@@ -363,7 +380,9 @@ async def test_http_library_gateway_routes_headers_unwrap_and_errors() -> None:
 
         # Missing token fails cleanly with 401 before sending HTTP
         with pytest.raises(LibraryGatewayError) as no_auth_exc:
-            await gateway.read.search_items(LibraryScope(space_id="u-1", user_id="u-1"), query="agents")
+            await gateway.read.search_items(
+                LibraryScope(space_id="u-1", user_id="u-1"), query="agents"
+            )
         assert no_auth_exc.value.status_code == 401
 
         with bind_delegation_token("jwt-abc-999"):
@@ -458,7 +477,11 @@ def test_library_agent_multi_step_read_and_citation_flow() -> None:
                 {
                     "action": "call_tools",
                     "tool_calls": [
-                        {"tool": "search_items", "args": {"query": "Attention"}, "reason": "find paper"}
+                        {
+                            "tool": "search_items",
+                            "args": {"query": "Attention"},
+                            "reason": "find paper",
+                        }
                     ],
                 }
             ),
@@ -515,8 +538,14 @@ def test_library_agent_safe_write_runs_directly_under_destructive_policy() -> No
                 {
                     "action": "call_tools",
                     "tool_calls": [
-                        {"tool": "add_paper", "args": {"source": "arxiv", "identifier": "1706.03762"}},
-                        {"tool": "save_note", "args": {"title": "Key Idea", "content_md": "Self-attention"}},
+                        {
+                            "tool": "add_paper",
+                            "args": {"source": "arxiv", "identifier": "1706.03762"},
+                        },
+                        {
+                            "tool": "save_note",
+                            "args": {"title": "Key Idea", "content_md": "Self-attention"},
+                        },
                     ],
                 }
             ),
@@ -783,8 +812,12 @@ def test_default_bootstrap_registers_library_agent_and_slice_isolation() -> None
         tree = ast.parse(py_file.read_text(encoding="utf-8"))
         for node in ast.walk(tree):
             if isinstance(node, ast.ImportFrom) and node.module:
-                assert not node.module.startswith("ai.agents.rag"), f"{py_file} imports {node.module}"
-                assert not node.module.startswith("ai.agents.web_search"), f"{py_file} imports {node.module}"
+                assert not node.module.startswith("ai.agents.rag"), (
+                    f"{py_file} imports {node.module}"
+                )
+                assert not node.module.startswith("ai.agents.web_search"), (
+                    f"{py_file} imports {node.module}"
+                )
             elif isinstance(node, ast.Import):
                 for alias in node.names:
                     assert not alias.name.startswith("ai.agents.rag")
@@ -817,7 +850,9 @@ class _ScriptedStreamingChatModel(BaseChatModel):
         **kwargs: Any,
     ) -> ChatResult:
         del messages, stop, run_manager, kwargs
-        return ChatResult(generations=[ChatGeneration(message=AIMessage(content="".join(self._next_chunks())))])
+        return ChatResult(
+            generations=[ChatGeneration(message=AIMessage(content="".join(self._next_chunks())))]
+        )
 
     def _stream(
         self,
@@ -914,4 +949,3 @@ async def test_library_event_publishers() -> None:
     lg_pub = LangGraphToolEvents("library_agent")
     await lg_pub.emit_tool_started("search_items", RunnableConfig())
     await lg_pub.emit_tool_completed("search_items", "ok", RunnableConfig())
-

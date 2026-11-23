@@ -169,6 +169,57 @@ def test_llm_role_model_resolution() -> None:
     assert tiered_cfg.effective_router_model == "tozpie-1.0-lite"
     assert tiered_cfg.effective_agent_model == "tozpie-1.0-pro"
 
+    # Per-role base URL & API key isolation + fallback to primary when unset
+    fallback_role_cfg = LLMConfig(
+        base_url="https://primary.example/v1",
+        api_key=SecretStr("sk-primary"),
+        extra_api_keys=SecretStr("sk-extra"),
+        router_base_url="",
+        router_api_key=SecretStr(""),
+        agent_base_url="",
+        agent_api_key=SecretStr(""),
+    )
+    assert fallback_role_cfg.effective_base_url("default") == "https://primary.example/v1"
+    assert fallback_role_cfg.effective_base_url("router") == "https://primary.example/v1"
+    assert fallback_role_cfg.effective_base_url("agent") == "https://primary.example/v1"
+    assert [k.get_secret_value() for k in fallback_role_cfg.role_api_key_pool("router")] == [
+        "sk-primary",
+        "sk-extra",
+    ]
+    assert [k.get_secret_value() for k in fallback_role_cfg.role_api_key_pool("agent")] == [
+        "sk-primary",
+        "sk-extra",
+    ]
+
+    isolated_role_cfg = LLMConfig(
+        base_url="https://primary.example/v1",
+        api_key=SecretStr("sk-default-role"),
+        router_base_url="https://router.example/v1",
+        router_api_key=SecretStr("sk-router-secret"),
+        agent_base_url="https://agent.example/v1",
+        agent_api_key=SecretStr("sk-agent-secret"),
+    )
+    assert isolated_role_cfg.effective_base_url("default") == "https://primary.example/v1"
+    assert isolated_role_cfg.effective_base_url("router") == "https://router.example/v1"
+    assert isolated_role_cfg.effective_base_url("agent") == "https://agent.example/v1"
+    assert [k.get_secret_value() for k in isolated_role_cfg.role_api_key_pool("default")] == [
+        "sk-default-role"
+    ]
+    assert [k.get_secret_value() for k in isolated_role_cfg.role_api_key_pool("router")] == [
+        "sk-router-secret"
+    ]
+    assert [k.get_secret_value() for k in isolated_role_cfg.role_api_key_pool("agent")] == [
+        "sk-agent-secret"
+    ]
+    rendered_isolated = f"{isolated_role_cfg!r} {isolated_role_cfg!s}"
+    assert "sk-router-secret" not in rendered_isolated
+    assert "sk-agent-secret" not in rendered_isolated
+
+    with pytest.raises(ValidationError):
+        LLMConfig(router_base_url="ftp://invalid-router")
+    with pytest.raises(ValidationError):
+        LLMConfig(agent_base_url="ftp://invalid-agent")
+
     local_emb = build_embedder(
         EmbeddingConfig(provider="local_hash", dimensions=32),
         LLMConfig(api_key=SecretStr("sk-test")),
@@ -182,6 +233,7 @@ def test_embedding_config_fallback_and_alias_security() -> None:
     cfg = EmbeddingConfig(
         provider="auto",
         base_url="http://127.0.0.1:11434/v1",
+        api_key=SecretStr(""),
         model="bge-m3",
         dimensions=1024,
         collection_name="kb_bge_m3",

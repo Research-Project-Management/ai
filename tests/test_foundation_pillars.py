@@ -44,7 +44,9 @@ class _SlowStreamingChatModel(BaseChatModel):
         **kwargs: Any,
     ) -> ChatResult:
         del messages, stop, run_manager, kwargs
-        return ChatResult(generations=[ChatGeneration(message=AIMessage(content="".join(self.tokens)))])
+        return ChatResult(
+            generations=[ChatGeneration(message=AIMessage(content="".join(self.tokens)))]
+        )
 
     def _stream(
         self,
@@ -194,26 +196,35 @@ def test_stateless_vs_stateful_execution_and_thread_lifecycle() -> None:
         assert purge_s1.status_code == 200
         assert purge_s1.json()["deleted_threads"] == 2
 
-        assert client.get("/threads/t-a/state?space_id=s1", headers=headers).json()["exists"] is False
-        assert client.get("/threads/t-c/state?space_id=s2", headers=headers).json()["exists"] is True
+        assert (
+            client.get("/threads/t-a/state?space_id=s1", headers=headers).json()["exists"] is False
+        )
+        assert (
+            client.get("/threads/t-c/state?space_id=s2", headers=headers).json()["exists"] is True
+        )
 
 
 def test_active_run_cancellation_stops_sse_stream() -> None:
-    slow_llm = _SlowStreamingChatModel(tokens=["first ", "second ", "third ", "fourth"], delay_seconds=0.08)
+    slow_llm = _SlowStreamingChatModel(
+        tokens=["first ", "second ", "third ", "fourth"], delay_seconds=0.08
+    )
     app = create_app(settings=_test_settings(), llm=slow_llm)
     headers = {"X-Internal-Key": "test-key"}
 
     observed_events: list[tuple[str, dict[str, Any]]] = []
-    with TestClient(app) as client, client.stream(
-        "POST",
-        "/chat",
-        headers=headers,
-        json={
-            "messages": [{"role": "user", "content": "Stream slowly"}],
-            "space_id": "s1",
-            "chat_id": "cancel-chat",
-        },
-    ) as response:
+    with (
+        TestClient(app) as client,
+        client.stream(
+            "POST",
+            "/chat",
+            headers=headers,
+            json={
+                "messages": [{"role": "user", "content": "Stream slowly"}],
+                "space_id": "s1",
+                "chat_id": "cancel-chat",
+            },
+        ) as response,
+    ):
         assert response.status_code == 200
         current_event = ""
         cancel_sent = False
@@ -279,7 +290,9 @@ def test_long_term_store_crud_search_and_space_isolation() -> None:
         )
         assert put_s2.status_code == 200
 
-        get_ok = client.get("/store/items/writing_style?space_id=s1&namespace=prefs", headers=headers)
+        get_ok = client.get(
+            "/store/items/writing_style?space_id=s1&namespace=prefs", headers=headers
+        )
         assert get_ok.status_code == 200
         assert get_ok.json()["value"]["tone"] == "concise"
 

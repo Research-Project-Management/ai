@@ -1,6 +1,7 @@
 """Comprehensive tests for `rag_agent` (`ingestion`, `retrieval`, `workflow`) and wiring."""
 
 import io
+import time
 from pathlib import Path
 
 import httpx
@@ -100,7 +101,9 @@ def test_markdown_pdf_and_docx_parsers_and_structure_chunker() -> None:
         section="Results",
         body="Hybrid search outperformed dense baseline across datasets.",
     )
-    docx_doc = registry.resolve(filename="notes.docx").parse_bytes(docx_bytes, filename="notes.docx")
+    docx_doc = registry.resolve(filename="notes.docx").parse_bytes(
+        docx_bytes, filename="notes.docx"
+    )
     assert docx_doc.title == "Lab Protocol"
     assert "# Results" in docx_doc.pages[0].markdown
     assert "| Metric | Score |" in docx_doc.pages[0].markdown
@@ -328,7 +331,9 @@ def test_rag_api_ingest_search_agent_discovery_and_chat_routing() -> None:
                     '"search_queries": ["attention latency 42 percent"]}'
                 )
             )
-        return AIMessage(content="According to the paper, sparse routing reduces latency by 42% [1].")
+        return AIMessage(
+            content="According to the paper, sparse routing reduces latency by 42% [1]."
+        )
 
     stub: ChatRunnable = RunnableLambda(_chat_and_rag_stub)
     app = create_app(settings=_test_settings(), llm=stub, router_llm=stub)
@@ -359,8 +364,21 @@ def test_rag_api_ingest_search_agent_discovery_and_chat_routing() -> None:
             },
             files={"file": ("attention.pdf", pdf_bytes, "application/pdf")},
         )
-        assert ingest_res.status_code == 200
-        ingest_body = ingest_res.json()
+        assert ingest_res.status_code == 202
+        queued_body = ingest_res.json()
+        assert queued_body["status"] == "queued"
+        job_id = queued_body["job_id"]
+
+        ingest_body = queued_body
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline:
+            poll_res = client.get(f"/knowledge/jobs/{job_id}", headers=headers)
+            assert poll_res.status_code == 200
+            ingest_body = poll_res.json()
+            if ingest_body["status"] in {"completed", "failed"}:
+                break
+            time.sleep(0.02)
+        assert ingest_body["status"] == "completed"
         assert ingest_body["title"] == "Attention Paper"
         assert ingest_body["pages_parsed"] == 2
         assert ingest_body["chunks_indexed"] >= 2
@@ -380,7 +398,9 @@ def test_rag_api_ingest_search_agent_discovery_and_chat_routing() -> None:
             "/chat/sync",
             headers=headers,
             json={
-                "messages": [{"role": "user", "content": "How much does sparse routing cut latency?"}],
+                "messages": [
+                    {"role": "user", "content": "How much does sparse routing cut latency?"}
+                ],
                 "space_id": "s-api",
                 "chat_id": "rag-chat-1",
                 "document_ids": ["att-1"],
@@ -400,9 +420,7 @@ def test_single_root_init_convention_for_rag_slice() -> None:
     rag_root = Path("src/ai/agents/rag")
     assert (rag_root / "module.py").is_file()
     assert list(rag_root.rglob("__init__.py")) == []
-    assert [p.as_posix() for p in Path("src/ai").rglob("__init__.py")] == [
-        "src/ai/__init__.py"
-    ]
+    assert [p.as_posix() for p in Path("src/ai").rglob("__init__.py")] == ["src/ai/__init__.py"]
 
 
 async def test_qdrant_alias_routing_and_blue_green_switch() -> None:
@@ -448,7 +466,9 @@ async def test_qdrant_alias_routing_and_blue_green_switch() -> None:
         active_alias = next(a for a in aliases.aliases if a.alias_name == "kb_active")
         assert active_alias.collection_name == "kb_v2"
 
-        hits_v2 = await green.search(space_id="space-alias", query="scientific evidence v2", limit=2)
+        hits_v2 = await green.search(
+            space_id="space-alias", query="scientific evidence v2", limit=2
+        )
         assert len(hits_v2) == 1
         assert hits_v2[0].source_id == "doc-v2"
     finally:

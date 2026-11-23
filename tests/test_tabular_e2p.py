@@ -333,7 +333,9 @@ async def test_editor_insert_experiment_table_registers_provenance_lineage() -> 
     assert result.status == "ok"
 
     table_id = "page:space-1#tab:vision_eval"
-    artifact_id = "github:flux-lab/vision-exp@a8f2c3e4b5d6e7f8a8f2c3e4b5d6e7f8a8f2c3e4:eval/metrics.csv"
+    artifact_id = (
+        "github:flux-lab/vision-exp@a8f2c3e4b5d6e7f8a8f2c3e4b5d6e7f8a8f2c3e4:eval/metrics.csv"
+    )
 
     table_node = facade.graph.get_node(table_id)
     artifact_node = facade.graph.get_node(artifact_id)
@@ -346,9 +348,7 @@ async def test_editor_insert_experiment_table_registers_provenance_lineage() -> 
     assert lineage[0].id == artifact_id
 
     audit_001 = [
-        f
-        for f in facade.audit_integrity()
-        if f.rule_id == "AUDIT_001" and table_id in f.entity_ids
+        f for f in facade.audit_integrity() if f.rule_id == "AUDIT_001" and table_id in f.entity_ids
     ]
     assert audit_001 == []
 

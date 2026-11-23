@@ -50,8 +50,12 @@ async def test_citation_integrity_guard_preserves_distinct_indices_and_dedups_un
     draft = DraftOutput(
         content="Claim A [[cite:2]] and Claim B [[cite:6]].",
         citations=(
-            CitationItem(index=2, source_id="doc-1", title="ResNet", page=6, snippet="Same snippet"),
-            CitationItem(index=6, source_id="doc-1", title="ResNet", page=6, snippet="Same snippet"),
+            CitationItem(
+                index=2, source_id="doc-1", title="ResNet", page=6, snippet="Same snippet"
+            ),
+            CitationItem(
+                index=6, source_id="doc-1", title="ResNet", page=6, snippet="Same snippet"
+            ),
             CitationItem(source_id="doc-2", title="Unindexed", page=1, snippet="Dup"),
             CitationItem(source_id="doc-2", title="Unindexed", page=1, snippet="Dup"),
             CitationItem(source_id="   ", title="Invalid"),

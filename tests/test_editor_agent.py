@@ -221,6 +221,7 @@ class InMemoryFakeEditorGateway:
         self.resolved_identifiers: list[str] = []
         self.synced_collections: list[str] = []
         self.created_suggestions: list[dict[str, Any]] = []
+        self.created_pages: list[dict[str, Any]] = []
 
     def _record(self, op: str, **kwargs: Any) -> None:
         self.calls.append((op, kwargs))
@@ -309,11 +310,9 @@ class InMemoryFakeEditorGateway:
     ) -> list[EditorCitationEntry]:
         self._record("list_citations", page_id=scope.page_id, query=query)
         q = query.strip().lower()
-        return [
-            c
-            for c in self.citations
-            if not q or q in c.key.lower() or q in c.title.lower()
-        ][:limit]
+        return [c for c in self.citations if not q or q in c.key.lower() or q in c.title.lower()][
+            :limit
+        ]
 
     async def validate_citations(self, scope: EditorScope) -> dict[str, Any]:
         self._record("validate_citations", page_id=scope.page_id)
@@ -473,6 +472,35 @@ class InMemoryFakeEditorGateway:
         self.created_suggestions.append(payload)
         return {"suggestion": payload}
 
+    async def create_page(
+        self,
+        scope: EditorScope,
+        *,
+        title: str,
+        description: str | None = None,
+        content: str | None = None,
+        template_type: str | None = None,
+    ) -> dict[str, Any]:
+        self._record(
+            "create_page",
+            space_id=scope.space_id,
+            title=title,
+            template_type=template_type,
+        )
+        if not scope.space_id.strip():
+            raise EditorGatewayError(400, "Active `space_id` is required to create a new page")
+        payload = {
+            "id": f"page-{len(self.created_pages) + 1}",
+            "spaceId": scope.space_id,
+            "title": title,
+            "description": description,
+            "content": content,
+            "templateType": template_type,
+            "status": "draft",
+        }
+        self.created_pages.append(payload)
+        return payload
+
 
 def _parse_sse(raw_body: str) -> list[tuple[str, dict[str, Any]]]:
     events: list[tuple[str, dict[str, Any]]] = []
@@ -492,9 +520,16 @@ def _parse_sse(raw_body: str) -> list[tuple[str, dict[str, Any]]]:
 
 
 def test_context_preamble_viewport_and_error_normalization() -> None:
-    many_lines = ["\\documentclass[11pt]{article}", "\\usepackage{amsmath, booktabs}", "\\newcommand{\\norm}[1]{\\|#1\\|}", "\\begin{document}"]
+    many_lines = [
+        "\\documentclass[11pt]{article}",
+        "\\usepackage{amsmath, booktabs}",
+        "\\newcommand{\\norm}[1]{\\|#1\\|}",
+        "\\begin{document}",
+    ]
     for i in range(1, 301):
-        many_lines.append(f"Line {i} content in paper." if i != 180 else "$x_i = y_i$ bad delimiter")
+        many_lines.append(
+            f"Line {i} content in paper." if i != 180 else "$x_i = y_i$ bad delimiter"
+        )
     many_lines.append("\\end{document}")
 
     summary = extract_preamble_summary("\n".join(many_lines))
@@ -528,7 +563,9 @@ def test_context_preamble_viewport_and_error_normalization() -> None:
     assert "\\norm" in rendered
     assert "[ERROR] (sections/eval.tex:L184)" in rendered
 
-    errs = normalize_compile_errors({"errors": [{"line": 12, "message": "Undefined control sequence"}]})
+    errs = normalize_compile_errors(
+        {"errors": [{"line": 12, "message": "Undefined control sequence"}]}
+    )
     assert len(errs) == 1
     assert errs[0].line == 12
 
@@ -670,12 +707,21 @@ async def test_http_editor_gateway_unwraps_envelope_and_forwards_auth() -> None:
                 json={
                     "success": True,
                     "data": {
-                        "files": [{"id": "d1", "path": "/main.tex", "title": "main.tex", "isRootDoc": True}]
+                        "files": [
+                            {
+                                "id": "d1",
+                                "path": "/main.tex",
+                                "title": "main.tex",
+                                "isRootDoc": True,
+                            }
+                        ]
                     },
                 },
             )
         if request.url.path.endswith("/lint-doc"):
-            return httpx.Response(200, json={"success": True, "data": {"errors": [], "warnings": []}})
+            return httpx.Response(
+                200, json={"success": True, "data": {"errors": [], "warnings": []}}
+            )
         if request.url.path.endswith("/search"):
             return httpx.Response(
                 200,
@@ -686,7 +732,9 @@ async def test_http_editor_gateway_unwraps_envelope_and_forwards_auth() -> None:
                             {
                                 "fileId": "d1",
                                 "fileName": "main.tex",
-                                "matches": [{"line": 4, "text": "\\section{Intro}", "matchStart": 0}],
+                                "matches": [
+                                    {"line": 4, "text": "\\section{Intro}", "matchStart": 0}
+                                ],
                             }
                         ]
                     },
@@ -699,7 +747,9 @@ async def test_http_editor_gateway_unwraps_envelope_and_forwards_auth() -> None:
         scope = EditorScope(page_id="page-99", active_file_path="main.tex")
         with bind_delegation_token("Bearer editor-jwt"):
             files = await gw.list_files(scope)
-            lint_res = await gw.lint_pages(scope, content="\\documentclass{article}", file_path="main.tex")
+            lint_res = await gw.lint_pages(
+                scope, content="\\documentclass{article}", file_path="main.tex"
+            )
             hits = await gw.search_pages(scope, query="Intro")
 
     assert files[0].path == "main.tex"
@@ -718,7 +768,9 @@ def test_editor_agent_self_corrects_and_streams_patch_artifact() -> None:
     router_json = json.dumps(
         {
             "mode": "delegate",
-            "targets": [{"agent": "editor_agent", "instruction": "Cite Vaswani in sections/method.tex"}],
+            "targets": [
+                {"agent": "editor_agent", "instruction": "Cite Vaswani in sections/method.tex"}
+            ],
             "needs_followup": False,
         }
     )
@@ -837,7 +889,9 @@ def test_editor_agent_sync_and_peer_handoff() -> None:
             json.dumps(
                 {
                     "mode": "delegate",
-                    "targets": [{"agent": "editor_agent", "instruction": "Draft citation sentence"}],
+                    "targets": [
+                        {"agent": "editor_agent", "instruction": "Draft citation sentence"}
+                    ],
                     "needs_followup": False,
                 }
             ),
@@ -1626,4 +1680,77 @@ def test_preamble_order_validation_rejects_usepackage_before_documentclass() -> 
     assert good_resolved.ok is True
 
 
+async def test_http_editor_gateway_create_page_and_tool_without_open_page() -> None:
+    import pytest
 
+    from ai.agents.editor.tools.contracts import EditorToolRuntime
+    from ai.agents.editor.tools.registry import build_default_editor_tool_registry
+    from ai.agents.editor.tools.write import CreatePageArgs, handle_create_page
+
+    captured: list[tuple[str, str, dict[str, Any] | None]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content.decode()) if request.content else None
+        captured.append((request.method, request.url.path, body))
+        if request.url.path == "/api/v1/pages/spaces/space-1/pages" and request.method == "POST":
+            return httpx.Response(
+                201,
+                json={
+                    "success": True,
+                    "data": {
+                        "id": "page-new-1",
+                        "spaceId": "space-1",
+                        "title": (body or {}).get("title"),
+                        "status": "draft",
+                    },
+                },
+            )
+        return httpx.Response(404, json={"message": "Not found"})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        gw = HttpEditorGateway(base_url="http://backend.local", http_client=client)
+        with bind_delegation_token("Bearer editor-jwt"):
+            with pytest.raises(EditorGatewayError, match="space_id"):
+                await gw.create_page(EditorScope(page_id="", space_id=""), title="FFA")
+
+            created = await gw.create_page(
+                EditorScope(page_id="", space_id="space-1"),
+                title="FFA",
+                description="Flux for Academic article",
+                template_type="article",
+            )
+
+    assert created["id"] == "page-new-1"
+    assert created["title"] == "FFA"
+    assert captured == [
+        (
+            "POST",
+            "/api/v1/pages/spaces/space-1/pages",
+            {
+                "title": "FFA",
+                "description": "Flux for Academic article",
+                "templateType": "article",
+            },
+        )
+    ]
+
+    fake_gw = InMemoryFakeEditorGateway()
+    registry = build_default_editor_tool_registry()
+    spec = registry.get("create_page")
+    assert spec is not None and spec.risk_tier == "write"
+    assert "create_page" in spec.format_confirmation(
+        {"title": "FFA"}
+    ) or "FFA" in spec.format_confirmation({"title": "FFA"})
+
+    runtime = EditorToolRuntime(
+        gateway=fake_gw,
+        scope=EditorScope(page_id="", space_id="space-1"),
+    )
+    res = await handle_create_page(
+        runtime,
+        CreatePageArgs(title="FFA", description="Flux for Academic"),
+    )
+    assert res.status == "ok"
+    assert res.tool == "create_page"
+    assert res.data is not None and res.data["title"] == "FFA"
+    assert len(fake_gw.created_pages) == 1

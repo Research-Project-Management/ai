@@ -388,7 +388,9 @@ async def test_fetch_security_identifiers_html_and_escalation_ladder() -> None:
         assert "user IP" in client_res.markdown
 
         # (c) IEEE 403 escalates from SafeHttpFetchStage to OpenAcademicMirrorStage
-        ieee_res = await ladder.fetch_one("https://ieeexplore.ieee.org/document/1?doi=10.1109/TEST.2025.1")
+        ieee_res = await ladder.fetch_one(
+            "https://ieeexplore.ieee.org/document/1?doi=10.1109/TEST.2025.1"
+        )
         assert ieee_res.is_blocked is False
         assert ieee_res.stage_resolved == "open_mirror"
         assert ieee_res.title == "Robust Multi-Agent RAG"
@@ -594,7 +596,9 @@ def test_web_search_api_discovery_domain_scope_and_client_ip_chat_routing() -> N
                     '"mode": "web", "sub_queries": ["pytorch compiler speedup"]}'
                 )
             )
-        return AIMessage(content="PyTorch 2 compiler tăng tốc biểu đồ lên 1.8x [1] và nguồn [2] bổ sung chi tiết.")
+        return AIMessage(
+            content="PyTorch 2 compiler tăng tốc biểu đồ lên 1.8x [1] và nguồn [2] bổ sung chi tiết."
+        )
 
     stub: ChatRunnable = RunnableLambda(_chat_and_web_stub)
     module = build_web_search_module(

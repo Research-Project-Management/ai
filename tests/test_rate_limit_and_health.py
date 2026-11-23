@@ -11,9 +11,11 @@ from langgraph.checkpoint.memory import MemorySaver
 from pydantic import SecretStr, ValidationError
 from redis.exceptions import RedisError
 
+from ai.bootstrap import _run_startup_warmup
 from ai.main import create_app
 from ai.orchestrator.contracts import AgentOutput, AgentRegistry, AgentSpec
 from ai.orchestrator.state import RootState
+from ai.runtime_builder import InfraBundle
 from ai.shared.config.database import DatabaseConfig, PostgresConfig, QdrantConfig, RedisConfig
 from ai.shared.config.llm import LLMConfig
 from ai.shared.config.rate_limit import RateLimitConfig
@@ -87,6 +89,7 @@ class _FakeRedis:
         self._ping_result = ping_result
         self._ping_error = ping_error
         self.eval_calls: list[tuple[Any, ...]] = []
+        self.ping_calls: int = 0
 
     async def eval(self, script: str, numkeys: int, *keys_and_args: Any) -> Any:
         del script
@@ -96,6 +99,7 @@ class _FakeRedis:
         return self._eval_responses.pop(0)
 
     async def ping(self) -> bool:
+        self.ping_calls += 1
         if self._ping_error is not None:
             raise self._ping_error
         return self._ping_result
@@ -409,3 +413,41 @@ async def test_concrete_infrastructure_probes_and_timeout_handling() -> None:
     assert "timeout" in statuses[1].detail.lower()
     assert statuses[2].status == "degraded"
     assert "timed out" in statuses[2].detail.lower()
+
+
+async def test_startup_warmup_invokes_redis_and_knowledge_and_fails_open() -> None:
+    class _WarmupKnowledge:
+        def __init__(self, *, delay: float = 0.0, error: Exception | None = None) -> None:
+            self._delay = delay
+            self._error = error
+            self.ready_calls = 0
+
+        async def ensure_ready(self) -> None:
+            self.ready_calls += 1
+            if self._delay > 0:
+                await asyncio.sleep(self._delay)
+            if self._error is not None:
+                raise self._error
+
+    def _infra(redis: Any, knowledge: Any) -> InfraBundle:
+        return InfraBundle(
+            http=cast(Any, None),
+            checkpointer=MemorySaver(),
+            redis=redis,
+            qdrant=None,
+            memory_store=cast(Any, None),
+            knowledge_store=cast(Any, knowledge),
+        )
+
+    redis_ok = _FakeRedis(ping_result=True)
+    kb_ok = _WarmupKnowledge()
+    await _run_startup_warmup(_infra(redis_ok, kb_ok), timeout_seconds=0.5)
+    assert redis_ok.ping_calls == 1
+    assert kb_ok.ready_calls == 1
+
+    # Fail-open when backends raise errors or time out
+    redis_fail = _FakeRedis(ping_error=RedisError("connection lost"))
+    kb_slow = _WarmupKnowledge(delay=0.3)
+    await _run_startup_warmup(_infra(redis_fail, kb_slow), timeout_seconds=0.05)
+    assert redis_fail.ping_calls == 1
+    assert kb_slow.ready_calls == 1
