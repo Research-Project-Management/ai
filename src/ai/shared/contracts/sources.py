@@ -22,17 +22,9 @@ class AttachedSource(BaseModel):
     has_pdf: bool = False
     indexed: bool = False
 
-    @field_validator("source_id", "item_id", "file_id", mode="before")
+    @field_validator("source_id", "item_id", "file_id", "source_type", mode="before")
     @classmethod
-    def _clean_optional_id(cls, value: Any) -> str | None:
-        if value is None:
-            return None
-        text = str(value).strip()
-        return text or None
-
-    @field_validator("source_type", mode="before")
-    @classmethod
-    def _clean_source_type(cls, value: Any) -> str | None:
+    def _clean_optional_text(cls, value: Any) -> str | None:
         if value is None:
             return None
         text = str(value).strip()

@@ -9,7 +9,7 @@ from collections import OrderedDict
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Literal, Protocol, runtime_checkable
 from urllib.parse import quote, unquote, urljoin, urlparse
 
 import httpx
@@ -125,11 +125,11 @@ class HttpFileContentFetcher:
         raw_len = resp.headers.get("content-length")
         if raw_len:
             try:
-                if int(raw_len) > self._max_bytes:
-                    raise ValueError(f"File size {raw_len} exceeds max_bytes={self._max_bytes}")
-            except ValueError as exc:
-                if "max_bytes=" in str(exc):
-                    raise
+                declared_len = int(raw_len)
+            except ValueError:
+                declared_len = None
+            if declared_len is not None and declared_len > self._max_bytes:
+                raise ValueError(f"File size {raw_len} exceeds max_bytes={self._max_bytes}")
 
         raw_bytes = resp.content
         if not raw_bytes:
@@ -185,6 +185,23 @@ class LazyIndexReport:
         }
 
 
+@dataclass(frozen=True)
+class _FileIndexOutcome:
+    """Typed per-source outcome produced during lazy PDF indexing."""
+
+    status: Literal["ready", "indexed", "failed"]
+    source_id: str
+    title: str = ""
+    error: str | None = None
+
+    def to_failure_dict(self) -> dict[str, str]:
+        return {
+            "source_id": self.source_id,
+            "title": self.title,
+            "error": self.error or "",
+        }
+
+
 class LazyPdfIndexer:
     """Ensures attached Library PDFs are indexed into Qdrant before RAG retrieval."""
 
@@ -222,6 +239,59 @@ class LazyPdfIndexer:
                 break
         return lock
 
+    async def _index_one(
+        self,
+        *,
+        space_id: str,
+        order_idx: int,
+        source_id: str,
+        file_id: str,
+        source: AttachedSource,
+        semaphore: asyncio.Semaphore,
+    ) -> tuple[int, _FileIndexOutcome]:
+        lock = self._lock_for(space_id, source_id)
+        try:
+            async with lock:
+                if await self._knowledge_store.has_source(space_id=space_id, source_id=source_id):
+                    return order_idx, _FileIndexOutcome(status="ready", source_id=source_id)
+
+                async with semaphore:
+                    raw_bytes, filename, mime_type = await asyncio.wait_for(
+                        self._file_fetcher.fetch_bytes(file_id),
+                        timeout=self._per_file_timeout_seconds,
+                    )
+                    meta: dict[str, str] = {"file_id": file_id}
+                    if source.item_id:
+                        meta["item_id"] = source.item_id
+
+                    await asyncio.wait_for(
+                        self._ingestion_pipeline.ingest(
+                            IngestDocumentRequest(
+                                space_id=space_id,
+                                source_type="file",
+                                source_id=source_id,
+                                title=source.title or filename,
+                                filename=filename,
+                                mime_type=mime_type,
+                                raw_bytes=raw_bytes,
+                                metadata=meta,
+                            )
+                        ),
+                        timeout=self._per_file_timeout_seconds,
+                    )
+                    return order_idx, _FileIndexOutcome(status="indexed", source_id=source_id)
+        except Exception as exc:  # noqa: BLE001 - keep turn alive on individual file errors
+            logger.warning("Lazy PDF index failed for source_id=%s: %s", source_id, exc)
+            return (
+                order_idx,
+                _FileIndexOutcome(
+                    status="failed",
+                    source_id=source_id,
+                    title=source.title,
+                    error=str(exc)[:200],
+                ),
+            )
+
     async def ensure_indexed(
         self,
         *,
@@ -230,15 +300,15 @@ class LazyPdfIndexer:
     ) -> LazyIndexReport:
         """Index missing PDF-backed sources lazily with bounded concurrency."""
         skipped_metadata: list[str] = []
-        outcomes: dict[int, tuple[str, str | dict[str, str]]] = {}
-        pending: list[tuple[int, str, AttachedSource]] = []
+        outcomes: dict[int, _FileIndexOutcome] = {}
+        pending: list[tuple[int, str, str, AttachedSource]] = []
         pending_sids: set[str] = set()
 
         for idx, src in enumerate(sources):
             if src.kind == "upload":
                 sid = src.effective_source_id
                 if sid:
-                    outcomes[idx] = ("ready", sid)
+                    outcomes[idx] = _FileIndexOutcome(status="ready", source_id=sid)
                 continue
 
             sid = src.effective_source_id
@@ -249,76 +319,26 @@ class LazyPdfIndexer:
 
             try:
                 if await self._knowledge_store.has_source(space_id=space_id, source_id=sid):
-                    outcomes[idx] = ("ready", sid)
+                    outcomes[idx] = _FileIndexOutcome(status="ready", source_id=sid)
                     continue
             except Exception as exc:  # noqa: BLE001
                 logger.warning("has_source check failed for %s: %s", sid, exc)
 
-            if not src.file_id:
-                outcomes[idx] = (
-                    "failed",
-                    {
-                        "source_id": sid,
-                        "title": src.title,
-                        "error": "not indexed and no file_id",
-                    },
+            file_id = src.file_id
+            if not file_id:
+                outcomes[idx] = _FileIndexOutcome(
+                    status="failed",
+                    source_id=sid,
+                    title=src.title,
+                    error="not indexed and no file_id",
                 )
                 continue
 
             if sid not in pending_sids:
                 pending_sids.add(sid)
-                pending.append((idx, sid, src))
+                pending.append((idx, sid, file_id, src))
 
         semaphore = asyncio.Semaphore(self._max_concurrency)
-
-        async def _index_one(
-            order_idx: int,
-            sid: str,
-            src: AttachedSource,
-        ) -> tuple[int, str, str | dict[str, str]]:
-            assert src.file_id is not None
-            lock = self._lock_for(space_id, sid)
-            try:
-                async with lock:
-                    if await self._knowledge_store.has_source(space_id=space_id, source_id=sid):
-                        return order_idx, "ready", sid
-
-                    async with semaphore:
-                        raw_bytes, filename, mime_type = await asyncio.wait_for(
-                            self._file_fetcher.fetch_bytes(src.file_id),
-                            timeout=self._per_file_timeout_seconds,
-                        )
-                        meta: dict[str, str] = {"file_id": src.file_id}
-                        if src.item_id:
-                            meta["item_id"] = src.item_id
-
-                        await asyncio.wait_for(
-                            self._ingestion_pipeline.ingest(
-                                IngestDocumentRequest(
-                                    space_id=space_id,
-                                    source_type="file",
-                                    source_id=sid,
-                                    title=src.title or filename,
-                                    filename=filename,
-                                    mime_type=mime_type,
-                                    raw_bytes=raw_bytes,
-                                    metadata=meta,
-                                )
-                            ),
-                            timeout=self._per_file_timeout_seconds,
-                        )
-                        return order_idx, "indexed", sid
-            except Exception as exc:  # noqa: BLE001 - keep turn alive on individual file errors
-                logger.warning("Lazy PDF index failed for source_id=%s: %s", sid, exc)
-                return (
-                    order_idx,
-                    "failed",
-                    {
-                        "source_id": sid,
-                        "title": src.title,
-                        "error": str(exc)[:200],
-                    },
-                )
 
         indexed_count = 0
         pos = 0
@@ -327,21 +347,29 @@ class LazyPdfIndexer:
             wave = pending[pos : pos + budget]
             pos += len(wave)
             wave_results = await asyncio.gather(
-                *(_index_one(order_idx, sid, src) for order_idx, sid, src in wave)
+                *(
+                    self._index_one(
+                        space_id=space_id,
+                        order_idx=order_idx,
+                        source_id=sid,
+                        file_id=file_id,
+                        source=src,
+                        semaphore=semaphore,
+                    )
+                    for order_idx, sid, file_id, src in wave
+                )
             )
-            for order_idx, status, payload in wave_results:
-                outcomes[order_idx] = (status, payload)
-                if status == "indexed":
+            for order_idx, outcome in wave_results:
+                outcomes[order_idx] = outcome
+                if outcome.status == "indexed":
                     indexed_count += 1
 
-        for order_idx, sid, src in pending[pos:]:
-            outcomes[order_idx] = (
-                "failed",
-                {
-                    "source_id": sid,
-                    "title": src.title,
-                    "error": "lazy_index_turn_limit_reached",
-                },
+        for order_idx, sid, _file_id, src in pending[pos:]:
+            outcomes[order_idx] = _FileIndexOutcome(
+                status="failed",
+                source_id=sid,
+                title=src.title,
+                error="lazy_index_turn_limit_reached",
             )
 
         ready: list[str] = []
@@ -350,15 +378,15 @@ class LazyPdfIndexer:
         failed: list[dict[str, str]] = []
 
         for idx in sorted(outcomes):
-            status, payload = outcomes[idx]
-            if status in {"ready", "indexed"} and isinstance(payload, str):
-                if payload not in ready_seen:
-                    ready_seen.add(payload)
-                    ready.append(payload)
-                if status == "indexed" and payload not in newly_indexed:
-                    newly_indexed.append(payload)
-            elif status == "failed" and isinstance(payload, dict):
-                failed.append(payload)
+            outcome = outcomes[idx]
+            if outcome.status in {"ready", "indexed"}:
+                if outcome.source_id not in ready_seen:
+                    ready_seen.add(outcome.source_id)
+                    ready.append(outcome.source_id)
+                if outcome.status == "indexed" and outcome.source_id not in newly_indexed:
+                    newly_indexed.append(outcome.source_id)
+            else:
+                failed.append(outcome.to_failure_dict())
 
         return LazyIndexReport(
             ready_source_ids=tuple(ready),

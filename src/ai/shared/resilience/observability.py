@@ -1,4 +1,4 @@
-"""Tool execution metrics and Token Budget Ports & Adapters (In-Memory & Redis)."""
+"""Tool execution metrics and per-space token budgets (in-memory and Redis)."""
 
 from __future__ import annotations
 
@@ -159,6 +159,25 @@ class LLMCallMetrics:
             return out
 
 
+_DEFAULT_MAX_TOKENS_PER_WINDOW = 500_000
+_DEFAULT_WINDOW_SECONDS = 86_400
+_DEFAULT_COST_PER_1K_INPUT_USD = 0.0005
+_DEFAULT_COST_PER_1K_OUTPUT_USD = 0.0015
+
+
+def _compute_usage_cost(
+    usage: RunUsage,
+    cost_in_per_1k: float,
+    cost_out_per_1k: float,
+) -> tuple[int, float]:
+    """Compute effective total tokens and estimated USD cost for one `RunUsage`."""
+    tokens = max(usage.total_tokens, usage.input_tokens + usage.output_tokens)
+    cost_usd = (usage.input_tokens / 1000.0) * cost_in_per_1k + (
+        usage.output_tokens / 1000.0
+    ) * cost_out_per_1k
+    return tokens, cost_usd
+
+
 @dataclass(frozen=True)
 class _UsageEvent:
     timestamp: float
@@ -172,10 +191,10 @@ class InMemoryTokenBudget:
     def __init__(
         self,
         *,
-        max_tokens_per_window: int = 500_000,
-        window_seconds: int = 86_400,
-        cost_per_1k_input_usd: float = 0.0005,
-        cost_per_1k_output_usd: float = 0.0015,
+        max_tokens_per_window: int = _DEFAULT_MAX_TOKENS_PER_WINDOW,
+        window_seconds: int = _DEFAULT_WINDOW_SECONDS,
+        cost_per_1k_input_usd: float = _DEFAULT_COST_PER_1K_INPUT_USD,
+        cost_per_1k_output_usd: float = _DEFAULT_COST_PER_1K_OUTPUT_USD,
     ) -> None:
         self._max_tokens = max(0, max_tokens_per_window)
         self._window_seconds = max(1, window_seconds)
@@ -206,10 +225,7 @@ class InMemoryTokenBudget:
     async def record(self, scope: str, usage: RunUsage) -> TokenQuotaStatus:
         now = time.monotonic()
         bucket = self._bucket(scope, now)
-        tokens = max(usage.total_tokens, usage.input_tokens + usage.output_tokens)
-        cost_usd = (usage.input_tokens / 1000.0) * self._cost_in_per_1k + (
-            usage.output_tokens / 1000.0
-        ) * self._cost_out_per_1k
+        tokens, cost_usd = _compute_usage_cost(usage, self._cost_in_per_1k, self._cost_out_per_1k)
         if tokens > 0 or cost_usd > 0.0:
             bucket.append(_UsageEvent(timestamp=now, total_tokens=tokens, cost_usd=cost_usd))
         return self._status(bucket)
@@ -242,10 +258,10 @@ class RedisTokenBudget:
         self,
         redis: Redis,
         *,
-        max_tokens_per_window: int = 500_000,
-        window_seconds: int = 86_400,
-        cost_per_1k_input_usd: float = 0.0005,
-        cost_per_1k_output_usd: float = 0.0015,
+        max_tokens_per_window: int = _DEFAULT_MAX_TOKENS_PER_WINDOW,
+        window_seconds: int = _DEFAULT_WINDOW_SECONDS,
+        cost_per_1k_input_usd: float = _DEFAULT_COST_PER_1K_INPUT_USD,
+        cost_per_1k_output_usd: float = _DEFAULT_COST_PER_1K_OUTPUT_USD,
         key_prefix: str = "flux:budget:",
     ) -> None:
         self._redis = redis
@@ -286,14 +302,10 @@ class RedisTokenBudget:
         try:
             tok_key = self._tokens_key(clean_scope)
             cost_key = self._cost_key(clean_scope)
-            if hasattr(self._redis, "pipeline"):
-                async with self._redis.pipeline(transaction=False) as pipe:
-                    pipe.get(tok_key)
-                    pipe.get(cost_key)
-                    raw_tok, raw_cost = await await_redis(pipe.execute())
-            else:
-                raw_tok = await await_redis(self._redis.get(tok_key))
-                raw_cost = await await_redis(self._redis.get(cost_key))
+            async with self._redis.pipeline(transaction=False) as pipe:
+                pipe.get(tok_key)
+                pipe.get(cost_key)
+                raw_tok, raw_cost = await await_redis(pipe.execute())
             used = int(raw_tok) if raw_tok is not None else 0
             cost_micros = int(raw_cost) if raw_cost is not None else 0
             return self._status(used, cost_micros)
@@ -303,10 +315,7 @@ class RedisTokenBudget:
 
     async def record(self, scope: str, usage: RunUsage) -> TokenQuotaStatus:
         clean_scope = scope.strip() or "default"
-        tokens = max(usage.total_tokens, usage.input_tokens + usage.output_tokens)
-        cost_usd = (usage.input_tokens / 1000.0) * self._cost_in_per_1k + (
-            usage.output_tokens / 1000.0
-        ) * self._cost_out_per_1k
+        tokens, cost_usd = _compute_usage_cost(usage, self._cost_in_per_1k, self._cost_out_per_1k)
         cost_micros = max(0, round(cost_usd * 1_000_000))
         if tokens <= 0 and cost_micros <= 0:
             return await self.check(clean_scope)
@@ -314,22 +323,15 @@ class RedisTokenBudget:
         try:
             tok_key = self._tokens_key(clean_scope)
             cost_key = self._cost_key(clean_scope)
-            if hasattr(self._redis, "pipeline"):
-                async with self._redis.pipeline(transaction=False) as pipe:
-                    pipe.incrby(tok_key, tokens)
-                    pipe.expire(tok_key, self._window_seconds, nx=True)
-                    pipe.incrby(cost_key, cost_micros)
-                    pipe.expire(cost_key, self._window_seconds, nx=True)
-                    pipe.sadd(self._scopes_key, clean_scope)
-                    results = await await_redis(pipe.execute())
-                used = int(results[0])
-                total_micros = int(results[2])
-            else:
-                used = int(await await_redis(self._redis.incrby(tok_key, tokens)))
-                await await_redis(self._redis.expire(tok_key, self._window_seconds, nx=True))
-                total_micros = int(await await_redis(self._redis.incrby(cost_key, cost_micros)))
-                await await_redis(self._redis.expire(cost_key, self._window_seconds, nx=True))
-                await await_redis(self._redis.sadd(self._scopes_key, clean_scope))
+            async with self._redis.pipeline(transaction=False) as pipe:
+                pipe.incrby(tok_key, tokens)
+                pipe.expire(tok_key, self._window_seconds, nx=True)
+                pipe.incrby(cost_key, cost_micros)
+                pipe.expire(cost_key, self._window_seconds, nx=True)
+                pipe.sadd(self._scopes_key, clean_scope)
+                results = await await_redis(pipe.execute())
+            used = int(results[0])
+            total_micros = int(results[2])
             return self._status(used, total_micros)
         except (RedisError, OSError, TimeoutError, ValueError) as exc:
             logger.warning(
@@ -347,7 +349,7 @@ class RedisTokenBudget:
             active_scopes = 0
             total_tokens = 0
             total_micros = 0
-            if sorted_scopes and hasattr(self._redis, "pipeline"):
+            if sorted_scopes:
                 async with self._redis.pipeline(transaction=False) as pipe:
                     for raw_scope in sorted_scopes:
                         pipe.get(self._tokens_key(raw_scope))
@@ -359,16 +361,6 @@ class RedisTokenBudget:
                     if raw_tok is None:
                         expired.append(raw_scope)
                         continue
-                    active_scopes += 1
-                    total_tokens += int(raw_tok)
-                    total_micros += int(raw_cost) if raw_cost is not None else 0
-            else:
-                for raw_scope in sorted_scopes:
-                    raw_tok = await await_redis(self._redis.get(self._tokens_key(raw_scope)))
-                    if raw_tok is None:
-                        expired.append(raw_scope)
-                        continue
-                    raw_cost = await await_redis(self._redis.get(self._cost_key(raw_scope)))
                     active_scopes += 1
                     total_tokens += int(raw_tok)
                     total_micros += int(raw_cost) if raw_cost is not None else 0
@@ -393,8 +385,8 @@ class RedisTokenBudget:
 def create_token_budget(
     redis: Redis | None,
     *,
-    max_tokens: int = 500_000,
-    window_seconds: int = 86_400,
+    max_tokens: int = _DEFAULT_MAX_TOKENS_PER_WINDOW,
+    window_seconds: int = _DEFAULT_WINDOW_SECONDS,
 ) -> TokenBudget:
     """Factory creating `RedisTokenBudget` when Redis is configured, else `InMemoryTokenBudget`."""
     if redis is not None:

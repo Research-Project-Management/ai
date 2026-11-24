@@ -15,7 +15,9 @@ class HasProvenance(Protocol):
     def snippet(self) -> str: ...
 
 
-class _ToolResultLike(Protocol):
+class ToolResult(Protocol):
+    """Structural view of a tool result shared across batch helpers and executor."""
+
     @property
     def tool(self) -> str: ...
     @property
@@ -24,9 +26,11 @@ class _ToolResultLike(Protocol):
     def data(self) -> Any: ...
     @property
     def error(self) -> str | None: ...
+    @property
+    def citations(self) -> Sequence[Any]: ...
 
 
-def observation_of(result: _ToolResultLike) -> dict[str, Any]:
+def observation_of(result: ToolResult) -> dict[str, Any]:
     """Serialize a tool result into the compact observation record fed back to the planner."""
     return {
         "tool": result.tool,

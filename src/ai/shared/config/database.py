@@ -4,7 +4,7 @@ from typing import Self
 
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
 
-from ai.shared.config.base import EnvConfigBase
+from ai.shared.config.base import EnvConfigBase, validate_http_url
 
 
 class PostgresConfig(EnvConfigBase):
@@ -69,10 +69,7 @@ class QdrantConfig(EnvConfigBase):
     @field_validator("qdrant_url")
     @classmethod
     def _validate_qdrant_url(cls, value: str) -> str:
-        stripped = value.strip()
-        if stripped and not stripped.startswith(("http://", "https://")):
-            raise ValueError("QDRANT_URL must start with http:// or https://")
-        return stripped
+        return validate_http_url(value, label="QDRANT_URL")
 
 
 class DatabaseConfig(BaseModel):

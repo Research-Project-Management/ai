@@ -1,9 +1,9 @@
-"""Shared planner contract: `PlannedCall`, `ActionPlan`, parsing, and one reasoning step."""
+"""Shared planner contract: `ToolAgentConfig`, `PlannedCall`, `ActionPlan`, and one reasoning step."""
 
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
@@ -11,8 +11,20 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from ai.shared.contracts.run_control import RunUsage
 from ai.shared.llm.factory import ChatRunnable
-from ai.shared.llm.nostream import with_nostream
-from ai.shared.llm.output import extract_text, parse_json_object, strip_reasoning
+from ai.shared.llm.output import extract_text, parse_json_object, strip_reasoning, with_nostream
+
+ToolHitlPolicy = Literal["destructive", "all_writes", "readonly"]
+
+
+class ToolAgentConfig(BaseModel):
+    """Immutable bounded execution and HITL safety configuration for tool-using agents."""
+
+    model_config = ConfigDict(frozen=True)
+
+    max_steps: int = Field(default=6, ge=1, le=12)
+    timeout_seconds: float = Field(default=90.0, gt=0.0, le=300.0)
+    tool_timeout_seconds: float = Field(default=15.0, gt=0.0, le=120.0)
+    hitl_policy: ToolHitlPolicy = "destructive"
 
 
 class PlannedCall(BaseModel):
@@ -90,6 +102,20 @@ def _extract_native_tool_calls(response: Any, *, max_calls: int) -> tuple[Planne
     return tuple(calls)
 
 
+def bind_planner_tools(
+    llm: ChatRunnable,
+    openai_tools: Sequence[dict[str, Any]] | None,
+) -> tuple[ChatRunnable, bool]:
+    """Bind OpenAI tool schemas onto `llm` when supported, else fall back to raw `llm`."""
+    bind_fn = getattr(llm, "bind_tools", None)
+    if openai_tools and callable(bind_fn):
+        try:
+            return cast(ChatRunnable, bind_fn(openai_tools)), True
+        except (NotImplementedError, TypeError):
+            return llm, False
+    return llm, False
+
+
 async def run_plan_step(
     llm: ChatRunnable,
     *,
@@ -103,16 +129,8 @@ async def run_plan_step(
     native_tools_bound: bool = False,
 ) -> dict[str, Any]:
     """Run one planner LLM call using native `bind_tools` when available, with JSON fallback."""
-    bind_fn = getattr(llm, "bind_tools", None)
-    used_native_tools = native_tools_bound
-    runnable: Any = llm
-    if tools and callable(bind_fn):
-        try:
-            runnable = bind_fn(tools)
-            used_native_tools = True
-        except (NotImplementedError, TypeError):
-            runnable = llm
-            used_native_tools = native_tools_bound
+    runnable, bound_now = bind_planner_tools(llm, tools)
+    used_native_tools = bound_now or native_tools_bound
 
     response = await runnable.ainvoke(
         [SystemMessage(content=system_prompt), HumanMessage(content=user_content)],

@@ -1,8 +1,11 @@
-"""LLM output normalization: text/reasoning channel extraction and JSON object parsing."""
+"""LLM output normalization, JSON parsing, and stream-suppression helpers."""
 
 import json
 import re
 from typing import Any, Literal
+
+from langchain_core.runnables import RunnableConfig
+from langgraph.constants import TAG_NOSTREAM
 
 _CODE_FENCE_RE = re.compile(r"^```(?:json)?\s*(.*?)\s*```$", re.DOTALL | re.IGNORECASE)
 _THINK_BLOCK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
@@ -173,3 +176,11 @@ def parse_json_object(raw_text: str) -> dict[str, Any] | None:
     except json.JSONDecodeError:
         return None
     return payload if isinstance(payload, dict) else None
+
+
+def with_nostream(config: RunnableConfig) -> RunnableConfig:
+    """Return a copy of RunnableConfig tagged to suppress intermediate token streaming."""
+    tags = list(config.get("tags") or ())
+    if TAG_NOSTREAM not in tags:
+        tags.append(TAG_NOSTREAM)
+    return {**config, "tags": tags}

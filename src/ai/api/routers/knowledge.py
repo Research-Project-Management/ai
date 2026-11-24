@@ -246,7 +246,7 @@ async def create_timeline_digest(
     store: Annotated[KnowledgeStore, Depends(get_knowledge_store)],
     limiter: Annotated[RateLimiter, Depends(get_rate_limiter)],
 ) -> KnowledgeTimelineDigestResponse:
-    """Compile chronological project events into a CoALA episodic timeline digest."""
+    """Compile chronological project events into an indexed timeline digest."""
     await enforce_space_rate_limit(payload.space_id, limiter)
     try:
         res = await upsert_timeline_digest(

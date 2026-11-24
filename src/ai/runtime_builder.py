@@ -1,4 +1,4 @@
-"""Modular runtime builders (models, infrastructure, agents) for Composition Root."""
+"""Runtime builders for models, infrastructure clients, and specialist agents."""
 
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ from qdrant_client import AsyncQdrantClient
 from redis.asyncio import Redis
 
 from ai.agents.editor.gateway.contracts import EditorGateway
+from ai.agents.editor.github.client import HttpGitHubArtifactClient
 from ai.agents.editor.module import build_editor_module
 from ai.agents.library.gateway.contracts import LibraryGateway
 from ai.agents.library.module import build_library_module
@@ -29,7 +30,6 @@ from ai.orchestrator.contracts import AgentSpec
 from ai.shared.config.server import AppEnvironment
 from ai.shared.config.settings import Settings
 from ai.shared.contracts.knowledge import Embedder, KnowledgeStore
-from ai.shared.github.client import HttpGitHubArtifactClient
 from ai.shared.llm.factory import ChatRunnable, ContextAwareChatRunnable, build_chat_model
 from ai.shared.persistence.checkpointer import create_checkpointer
 from ai.shared.persistence.knowledge import create_knowledge_store
@@ -169,7 +169,7 @@ def build_agents(
     editor_gateway: EditorGateway | None = None,
     project_gateway: ProjectGateway | None = None,
 ) -> AgentBundle:
-    """Assemble all enabled vertical-slice specialist modules and shared facades."""
+    """Assemble all enabled specialist agent modules and shared services."""
     allow_remote = settings.server.app_env != AppEnvironment.TEST
     internal_key = settings.server.internal_api_key.get_secret_value()
 

@@ -1,47 +1,32 @@
-"""LLM-backed Supervisor planner and internal streaming helpers."""
+"""LLM-backed Supervisor planner and routing decision parser."""
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
-from typing import Any
+from collections.abc import Sequence
 
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
 
 from ai.orchestrator.context_policy import SlidingWindowContextPolicy
 from ai.orchestrator.contracts import (
-    AgentOutput,
     AgentRegistry,
     AgentTaskAssignment,
     ContextWindowPolicy,
     RoutingDecision,
 )
-from ai.orchestrator.policies import DEFAULT_POLICIES, PolicyChain, PolicyContext
 from ai.orchestrator.prompts import build_supervisor_prompt
 from ai.orchestrator.state import RootState
 from ai.shared.contracts.run_control import RunUsage
 from ai.shared.llm.factory import ChatRunnable
-from ai.shared.llm.nostream import with_nostream
-from ai.shared.llm.output import extract_text, parse_json_object
+from ai.shared.llm.output import extract_text, parse_json_object, with_nostream
 
 
-def enforce_routing_invariants(
-    decision: RoutingDecision,
-    *,
-    query: str,
-    request_context: Mapping[str, Any] | None,
-    prior_outputs: Sequence[AgentOutput],
-    registry: AgentRegistry,
-    policies: PolicyChain = DEFAULT_POLICIES,
-) -> RoutingDecision:
-    """Enforce deterministic routing invariant policies before returning a Supervisor plan."""
-    ctx = PolicyContext(
-        query=query,
-        request_context=request_context,
-        prior_outputs=prior_outputs,
-        registry=registry,
-    )
-    return policies.apply(decision, ctx)
+def latest_user_query(messages: Sequence[BaseMessage]) -> str:
+    """Return the trimmed text of the most recent HumanMessage, or empty string."""
+    for msg in reversed(messages):
+        if isinstance(msg, HumanMessage):
+            return extract_text(msg.content).strip()
+    return ""
 
 
 def parse_routing_decision(
@@ -95,7 +80,7 @@ def parse_routing_decision(
 
 
 class LLMSupervisorPlanner:
-    """Default RoutePlanner using the configured router ChatRunnable and PolicyChain."""
+    """Default RoutePlanner using the configured router ChatRunnable."""
 
     def __init__(
         self,
@@ -103,25 +88,14 @@ class LLMSupervisorPlanner:
         *,
         context_policy: ContextWindowPolicy | None = None,
         max_rounds: int = 3,
-        policies: PolicyChain | None = None,
     ) -> None:
         self._router_llm = router_llm
         self._context_policy: ContextWindowPolicy = context_policy or SlidingWindowContextPolicy(
             max_messages=6, max_chars=12_000
         )
         self._max_rounds = max_rounds
-        self._policies = policies or DEFAULT_POLICIES
 
     async def plan(
-        self,
-        state: RootState,
-        registry: AgentRegistry,
-        config: RunnableConfig,
-    ) -> RoutingDecision:
-        decision, _ = await self.plan_with_usage(state, registry, config)
-        return decision
-
-    async def plan_with_usage(
         self,
         state: RootState,
         registry: AgentRegistry,
@@ -129,11 +103,7 @@ class LLMSupervisorPlanner:
     ) -> tuple[RoutingDecision, RunUsage]:
         messages = state.get("messages", [])
         prior_outputs = state.get("agent_outputs", [])
-        latest_human = ""
-        for msg in reversed(messages):
-            if isinstance(msg, HumanMessage):
-                latest_human = extract_text(msg.content).strip()
-                break
+        latest_human = latest_user_query(messages)
 
         if not latest_human:
             return (
@@ -165,12 +135,4 @@ class LLMSupervisorPlanner:
             registry,
             has_prior_outputs=bool(prior_outputs),
         )
-        enforced = enforce_routing_invariants(
-            decision,
-            query=latest_human,
-            request_context=req_ctx,
-            prior_outputs=prior_outputs,
-            registry=registry,
-            policies=self._policies,
-        )
-        return enforced, router_usage
+        return decision, router_usage

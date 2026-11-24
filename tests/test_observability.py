@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any, cast
+from dataclasses import replace
+from typing import Any, Self, cast
 
 import pytest
 from fastapi.testclient import TestClient
@@ -157,6 +158,42 @@ async def test_create_token_budget_factory_and_in_memory_adapter() -> None:
 
 
 async def test_redis_token_budget_adapter_and_fail_open() -> None:
+    class _FakePipeline:
+        def __init__(self, redis: _FakeAsyncRedis) -> None:
+            self._redis = redis
+            self._ops: list[tuple[str, tuple[Any, ...], dict[str, Any]]] = []
+
+        async def __aenter__(self) -> Self:
+            return self
+
+        async def __aexit__(self, *_exc: object) -> None:
+            return None
+
+        def get(self, key: str) -> _FakePipeline:
+            self._ops.append(("get", (key,), {}))
+            return self
+
+        def incrby(self, key: str, amount: int) -> _FakePipeline:
+            self._ops.append(("incrby", (key, amount), {}))
+            return self
+
+        def expire(self, key: str, seconds: int, *, nx: bool = False) -> _FakePipeline:
+            self._ops.append(("expire", (key, seconds), {"nx": nx}))
+            return self
+
+        def sadd(self, key: str, *values: str) -> _FakePipeline:
+            self._ops.append(("sadd", (key, *values), {}))
+            return self
+
+        async def execute(self) -> list[Any]:
+            self._redis._guard()
+            results: list[Any] = []
+            for op, args, kwargs in self._ops:
+                method = getattr(self._redis, op)
+                results.append(await method(*args, **kwargs))
+            self._ops.clear()
+            return results
+
     class _FakeAsyncRedis:
         def __init__(self) -> None:
             self.kv: dict[str, int] = {}
@@ -167,6 +204,10 @@ async def test_redis_token_budget_adapter_and_fail_open() -> None:
         def _guard(self) -> None:
             if self.fail:
                 raise RedisError("simulated redis outage")
+
+        def pipeline(self, *, transaction: bool = True) -> _FakePipeline:
+            del transaction
+            return _FakePipeline(self)
 
         async def get(self, key: str) -> str | None:
             self._guard()
@@ -268,8 +309,8 @@ async def test_resilience_health_endpoint_auth_and_payload() -> None:
         assert bad_auth.status_code == 401
 
         # 2. Mutate wired state to confirm live state reflection
-        app.state.tool_metrics.record_call("github_fetch", latency_ms=42.5, ok=True)
-        app.state.llm_metrics.record_call(
+        app.state.container.tool_metrics.record_call("github_fetch", latency_ms=42.5, ok=True)
+        app.state.container.llm_metrics.record_call(
             "agent",
             "deepseek-v3.2",
             latency_ms=250.0,
@@ -277,7 +318,7 @@ async def test_resilience_health_endpoint_auth_and_payload() -> None:
             input_tokens=100,
             output_tokens=50,
         )
-        await app.state.token_budget.record(
+        await app.state.container.token_budget.record(
             "space-live", RunUsage(input_tokens=500, output_tokens=100, total_tokens=600)
         )
 
@@ -336,7 +377,10 @@ async def test_chat_enforces_and_records_token_budget() -> None:
     headers = {"X-Internal-Key": "obs-test-key"}
     with TestClient(app) as client:
         # Each turn runs supervisor router (200 tok) + direct response (200 tok) = 400 tokens.
-        app.state.token_budget = InMemoryTokenBudget(max_tokens_per_window=500)
+        app.state.container = replace(
+            app.state.container,
+            token_budget=InMemoryTokenBudget(max_tokens_per_window=500),
+        )
 
         # 1. First sync chat consumes 400 tokens (< 500 limit) and records usage
         ok1 = client.post(
@@ -349,7 +393,7 @@ async def test_chat_enforces_and_records_token_budget() -> None:
             },
         )
         assert ok1.status_code == 200
-        quota_after_1 = await app.state.token_budget.check("space-budget-1")
+        quota_after_1 = await app.state.container.token_budget.check("space-budget-1")
         assert quota_after_1.used_tokens == 400
         assert quota_after_1.allowed is True
 
@@ -364,7 +408,7 @@ async def test_chat_enforces_and_records_token_budget() -> None:
             },
         )
         assert ok2.status_code == 200
-        quota_after_2 = await app.state.token_budget.check("space-budget-1")
+        quota_after_2 = await app.state.container.token_budget.check("space-budget-1")
         assert quota_after_2.allowed is False
 
         # 3. Third chat request is blocked at the gate with 429 token_budget_exceeded

@@ -1,4 +1,4 @@
-"""Tier-2 HITL-gated destructive & admin commands (`risk_tier='destructive'`)."""
+"""HITL-gated destructive and project administration commands."""
 
 from __future__ import annotations
 
@@ -60,13 +60,13 @@ async def handle_delete_work_item(
     runtime: ProjectToolRuntime, args: DeleteWorkItemArgs
 ) -> ProjectToolResult:
     if args.mode == "archive":
-        item = await runtime.gateway.work_items.archive_work_item(runtime.scope, args.work_item_id)
+        item = await runtime.gateway.work_items.archive_work_item(args.work_item_id)
         return ProjectToolResult(
             tool="delete_work_item",
             status="ok",
             data={"mode": "archive", "work_item": item.model_dump(mode="json")},
         )
-    res = await runtime.gateway.work_items.delete_work_item(runtime.scope, args.work_item_id)
+    res = await runtime.gateway.work_items.delete_work_item(args.work_item_id)
     return ProjectToolResult(
         tool="delete_work_item",
         status="ok",
@@ -81,7 +81,6 @@ async def handle_update_project(
     if err or not pid:
         return ProjectToolResult(tool="update_project", status="error", error=err)
     updated = await runtime.gateway.projects.update_project(
-        runtime.scope,
         pid,
         name=args.name,
         description=args.description,
@@ -101,9 +100,7 @@ async def handle_add_member(runtime: ProjectToolRuntime, args: AddMemberArgs) ->
     pid, err = await runtime.resolve_project_id(args.project_id)
     if err or not pid:
         return ProjectToolResult(tool="add_project_member", status="error", error=err)
-    member = await runtime.gateway.projects.add_member(
-        runtime.scope, pid, user_id=args.user_id, role=args.role
-    )
+    member = await runtime.gateway.projects.add_member(pid, user_id=args.user_id, role=args.role)
     runtime.members_by_project.pop(pid, None)
     return ProjectToolResult(
         tool="add_project_member",
@@ -119,13 +116,11 @@ async def handle_update_member_role(
     if err or not pid:
         return ProjectToolResult(tool="update_member_role", status="error", error=err)
 
-    mem_res = resolve_member(args.member, await runtime.get_members(pid))
-    if not mem_res.ok or mem_res.match is None:
-        return ProjectToolResult(tool="update_member_role", status="error", error=mem_res.error)
+    member_id, mem_err = await runtime.resolve_member_id(pid, args.member)
+    if mem_err or not member_id:
+        return ProjectToolResult(tool="update_member_role", status="error", error=mem_err)
 
-    updated = await runtime.gateway.projects.update_member_role(
-        runtime.scope, pid, mem_res.match.id, role=args.role
-    )
+    updated = await runtime.gateway.projects.update_member_role(pid, member_id, role=args.role)
     runtime.members_by_project.pop(pid, None)
     return ProjectToolResult(
         tool="update_member_role",
@@ -145,7 +140,7 @@ async def handle_remove_member(
     if not mem_res.ok or mem_res.match is None:
         return ProjectToolResult(tool="remove_project_member", status="error", error=mem_res.error)
 
-    res = await runtime.gateway.projects.remove_member(runtime.scope, pid, mem_res.match.id)
+    res = await runtime.gateway.projects.remove_member(pid, mem_res.match.id)
     runtime.members_by_project.pop(pid, None)
     return ProjectToolResult(
         tool="remove_project_member",
@@ -165,7 +160,7 @@ async def handle_delete_label(
     if not lb_res.ok or lb_res.match is None:
         return ProjectToolResult(tool="delete_label", status="error", error=lb_res.error)
 
-    res = await runtime.gateway.projects.delete_label(runtime.scope, pid, lb_res.match.id)
+    res = await runtime.gateway.projects.delete_label(pid, lb_res.match.id)
     runtime.labels_by_project.pop(pid, None)
     return ProjectToolResult(
         tool="delete_label",
@@ -202,7 +197,7 @@ def _confirm_delete_label(args: dict[str, Any]) -> str:
 
 
 def build_destructive_tools() -> tuple[ProjectToolSpec, ...]:
-    """Build Tier-2 HITL-gated destructive and project administration tools."""
+    """Build HITL-gated destructive and project administration tools."""
     return (
         ProjectToolSpec(
             name="delete_work_item",

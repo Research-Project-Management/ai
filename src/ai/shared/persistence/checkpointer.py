@@ -22,7 +22,7 @@ _ALLOWED_MSGPACK_MODULES: Final[tuple[tuple[str, str], ...]] = (
 
 @asynccontextmanager
 async def create_checkpointer(config: PostgresConfig) -> AsyncIterator[BaseCheckpointSaver]:
-    """Yield an async LangGraph checkpointer using only PostgresConfig (ISP/DIP)."""
+    """Yield an async LangGraph checkpointer configured from PostgresConfig."""
     serde = JsonPlusSerializer(allowed_msgpack_modules=_ALLOWED_MSGPACK_MODULES)
     if not config.is_configured:
         yield MemorySaver(serde=serde)

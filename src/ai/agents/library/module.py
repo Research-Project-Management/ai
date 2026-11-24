@@ -9,12 +9,12 @@ import httpx
 from ai.agents.library.gateway.contracts import LibraryGateway
 from ai.agents.library.gateway.http import HttpLibraryGateway
 from ai.agents.library.tools.contracts import LibraryToolRegistry, build_default_tool_registry
-from ai.agents.library.workflow.contracts import LibraryAgentConfig
 from ai.agents.library.workflow.graph import build_library_agent_spec
 from ai.orchestrator.contracts import AgentSpec
-from ai.shared.config.library import LibraryConfig
+from ai.shared.config.agents import LibraryConfig
 from ai.shared.llm.factory import ChatRunnable
 from ai.shared.workflow.events import ToolEventPublisher
+from ai.shared.workflow.plan import ToolAgentConfig
 
 
 @dataclass(frozen=True)
@@ -30,7 +30,7 @@ def build_library_module(
     *,
     llm: ChatRunnable,
     config: LibraryConfig | None = None,
-    agent_config: LibraryAgentConfig | None = None,
+    agent_config: ToolAgentConfig | None = None,
     gateway: LibraryGateway | None = None,
     tool_registry: LibraryToolRegistry | None = None,
     http_client: httpx.AsyncClient | None = None,
@@ -45,7 +45,7 @@ def build_library_module(
         http_client=http_client,
     )
     active_tools = tool_registry or build_default_tool_registry()
-    eff_agent_cfg = agent_config or LibraryAgentConfig(
+    eff_agent_cfg = agent_config or ToolAgentConfig(
         max_steps=cfg.max_steps,
         tool_timeout_seconds=cfg.timeout_seconds,
         timeout_seconds=min(300.0, max(30.0, cfg.timeout_seconds * cfg.max_steps)),

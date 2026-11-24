@@ -20,6 +20,49 @@ class _Block:
     page_number: int | None
 
 
+class _ChunkBuffer:
+    """Mutable accumulator for assembling token-bounded Markdown chunks."""
+
+    def __init__(self, sep_tokens: int) -> None:
+        self._sep_tokens = sep_tokens
+        self.parts: list[str] = []
+        self.part_tokens: list[int] = []
+        self.tokens: int = 0
+        self.page: int | None = None
+        self.section: str = ""
+
+    def __bool__(self) -> bool:
+        return bool(self.parts)
+
+    def projected_tokens(self, block_tokens: int) -> int:
+        return self.tokens + (self._sep_tokens if self.parts else 0) + block_tokens
+
+    def heading_overlap(self) -> tuple[str, int]:
+        if self.parts and self.parts[-1].startswith("#"):
+            return self.parts[-1], self.part_tokens[-1]
+        return "", 0
+
+    def append(self, text: str, tokens: int, *, page: int | None, section: str) -> None:
+        if self.parts:
+            self.tokens += self._sep_tokens
+        else:
+            self.page = page
+            self.section = section
+        self.parts.append(text)
+        self.part_tokens.append(tokens)
+        self.tokens += tokens
+
+    def flush(self, out: list[tuple[int | None, str, str]]) -> None:
+        body = "\n\n".join(part for part in self.parts if part.strip()).strip()
+        if body:
+            out.append((self.page, self.section, body))
+        self.parts = []
+        self.part_tokens = []
+        self.tokens = 0
+        self.page = None
+        self.section = ""
+
+
 def _split_blocks(
     markdown: str,
     *,
@@ -223,45 +266,30 @@ class MarkdownStructureChunker:
             return []
 
         raw_chunks: list[tuple[int | None, str, str]] = []
-        buf_parts: list[str] = []
-        buf_part_tokens: list[int] = []
-        buf_tokens = 0
-        buf_page: int | None = None
-        buf_section = ""
-
-        def flush() -> None:
-            nonlocal buf_parts, buf_part_tokens, buf_tokens, buf_page, buf_section
-            body = "\n\n".join(part for part in buf_parts if part.strip()).strip()
-            if body:
-                raw_chunks.append((buf_page, buf_section, body))
-            buf_parts = []
-            buf_part_tokens = []
-            buf_tokens = 0
-            buf_page = None
-            buf_section = ""
+        buf = _ChunkBuffer(self._sep_tokens)
 
         for block in all_blocks:
             if not block.text.strip():
                 continue
 
-            if buf_parts and (buf_page != block.page_number or buf_section != block.section):
-                flush()
+            if buf and (buf.page != block.page_number or buf.section != block.section):
+                buf.flush(raw_chunks)
 
             block_tokens = self.count_tokens(block.text)
-            projected_tokens = buf_tokens + (self._sep_tokens if buf_parts else 0) + block_tokens
+            projected_tokens = buf.projected_tokens(block_tokens)
 
             if block.kind == "table":
-                if buf_parts and projected_tokens > self._chunk_size:
-                    flush()
+                if buf and projected_tokens > self._chunk_size:
+                    buf.flush(raw_chunks)
                 table_parts = self._split_oversize_table(block.text, total_tokens=block_tokens)
                 if len(table_parts) > 1 or block_tokens > self._chunk_size:
-                    flush()
+                    buf.flush(raw_chunks)
                     for part in table_parts:
                         raw_chunks.append((block.page_number, block.section, part))
                     continue
 
             if block.kind in {"prose", "fence"} and block_tokens > self._chunk_size:
-                flush()
+                buf.flush(raw_chunks)
                 if block.kind == "fence":
                     raw_chunks.append((block.page_number, block.section, block.text))
                 else:
@@ -269,27 +297,25 @@ class MarkdownStructureChunker:
                         raw_chunks.append((block.page_number, block.section, part))
                 continue
 
-            if buf_parts and projected_tokens > self._chunk_size:
-                overlap_tail = buf_parts[-1] if buf_parts[-1].startswith("#") else ""
-                overlap_tokens = buf_part_tokens[-1] if overlap_tail else 0
-                flush()
+            if buf and projected_tokens > self._chunk_size:
+                overlap_tail, overlap_tokens = buf.heading_overlap()
+                buf.flush(raw_chunks)
                 if overlap_tail and block.kind != "heading":
-                    buf_parts = [overlap_tail]
-                    buf_part_tokens = [overlap_tokens]
-                    buf_tokens = overlap_tokens
-                    buf_page = block.page_number
-                    buf_section = block.section
+                    buf.append(
+                        overlap_tail,
+                        overlap_tokens,
+                        page=block.page_number,
+                        section=block.section,
+                    )
 
-            if buf_parts:
-                buf_tokens += self._sep_tokens
-            else:
-                buf_page = block.page_number
-                buf_section = block.section
-            buf_parts.append(block.text)
-            buf_part_tokens.append(block_tokens)
-            buf_tokens += block_tokens
+            buf.append(
+                block.text,
+                block_tokens,
+                page=block.page_number,
+                section=block.section,
+            )
 
-        flush()
+        buf.flush(raw_chunks)
 
         results: list[KnowledgeChunkInput] = []
         for idx, (page_num, section, body) in enumerate(raw_chunks):

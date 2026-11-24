@@ -140,18 +140,18 @@ class RoutingDecision(BaseModel):
 
 
 class RoutePlanner(Protocol):
-    """Strategy interface for routing and multi-agent task planning."""
+    """Protocol for routing and multi-agent task planning."""
 
     async def plan(
         self,
         state: Any,
         registry: AgentRegistry,
         config: RunnableConfig,
-    ) -> RoutingDecision: ...
+    ) -> tuple[RoutingDecision, RunUsage]: ...
 
 
 class ContextWindowPolicy(Protocol):
-    """Strategy interface for bounding conversation history sent to LLMs."""
+    """Protocol for bounding conversation history sent to LLMs."""
 
     def select_messages(self, messages: Sequence[BaseMessage]) -> list[BaseMessage]: ...
 

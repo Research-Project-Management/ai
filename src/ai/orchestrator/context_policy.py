@@ -2,7 +2,7 @@
 
 from collections.abc import Sequence
 
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
+from langchain_core.messages import BaseMessage
 
 
 def _message_text_len(message: BaseMessage) -> int:
@@ -18,12 +18,6 @@ def _truncate_message(message: BaseMessage, max_chars: int) -> BaseMessage:
     if len(text) <= max_chars:
         return message
     truncated = text[: max_chars - 14].rstrip() + "...[truncated]"
-    if isinstance(message, HumanMessage):
-        return HumanMessage(content=truncated)
-    if isinstance(message, AIMessage):
-        return AIMessage(content=truncated)
-    if isinstance(message, SystemMessage):
-        return SystemMessage(content=truncated)
     return message.model_copy(update={"content": truncated})
 
 

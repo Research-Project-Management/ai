@@ -12,11 +12,11 @@ from ai.agents.project.tools.contracts import (
     ProjectToolRegistry,
     build_default_project_tool_registry,
 )
-from ai.agents.project.workflow.contracts import ProjectAgentConfig
 from ai.agents.project.workflow.graph import build_project_agent_spec
 from ai.orchestrator.contracts import AgentSpec
-from ai.shared.config.project import ProjectConfig
+from ai.shared.config.agents import ProjectConfig
 from ai.shared.llm.factory import ChatRunnable
+from ai.shared.workflow.plan import ToolAgentConfig
 
 
 @dataclass(frozen=True)
@@ -32,7 +32,7 @@ def build_project_module(
     *,
     llm: ChatRunnable,
     config: ProjectConfig | None = None,
-    agent_config: ProjectAgentConfig | None = None,
+    agent_config: ToolAgentConfig | None = None,
     gateway: ProjectGateway | None = None,
     tool_registry: ProjectToolRegistry | None = None,
     http_client: httpx.AsyncClient | None = None,
@@ -47,7 +47,7 @@ def build_project_module(
         internal_api_key=internal_api_key,
     )
     active_tools = tool_registry or build_default_project_tool_registry()
-    eff_agent_cfg = agent_config or ProjectAgentConfig(
+    eff_agent_cfg = agent_config or ToolAgentConfig(
         max_steps=cfg.max_steps,
         tool_timeout_seconds=cfg.timeout_seconds,
         timeout_seconds=min(300.0, max(45.0, cfg.timeout_seconds * cfg.max_steps)),

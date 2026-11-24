@@ -1,4 +1,4 @@
-"""Tier-0 analytics, workload, overdue, member summary & project health commands."""
+"""Read-only analytics, workload, overdue, member summary, and project health commands."""
 
 from __future__ import annotations
 
@@ -37,7 +37,7 @@ async def handle_get_workload_distribution(
     pid, err = await runtime.resolve_project_id(args.project_id)
     if err or not pid:
         return ProjectToolResult(tool="get_workload_distribution", status="error", error=err)
-    analytics = await runtime.gateway.analytics.get_project_analytics(runtime.scope, pid)
+    analytics = await runtime.gateway.analytics.get_project_analytics(pid)
     runtime.add_widget(build_metric_summary_widget(analytics, title="Workload Summary"))
     return ProjectToolResult(
         tool="get_workload_distribution",
@@ -52,9 +52,7 @@ async def handle_get_overdue_report(
     pid, err = await runtime.resolve_project_id(args.project_id)
     if err or not pid:
         return ProjectToolResult(tool="get_overdue_report", status="error", error=err)
-    items = await runtime.gateway.work_items.list_work_items(
-        runtime.scope, pid, completed=False, limit=200
-    )
+    items = await runtime.gateway.work_items.list_work_items(pid, completed=False, limit=200)
     overdue = [w for w in items if w.is_overdue and not w.completed]
     runtime.add_widget(build_work_item_overview_widget(overdue, title="Overdue Work Items"))
     return ProjectToolResult(
@@ -75,8 +73,8 @@ async def handle_audit_project_health(
     if err or not pid:
         return ProjectToolResult(tool="audit_project_health", status="error", error=err)
 
-    items = await runtime.gateway.work_items.list_work_items(runtime.scope, pid, limit=200)
-    analytics = await runtime.gateway.analytics.get_project_analytics(runtime.scope, pid)
+    items = await runtime.gateway.work_items.list_work_items(pid, limit=200)
+    analytics = await runtime.gateway.analytics.get_project_analytics(pid)
     report = audit_project_health(items, analytics, project_id=pid)
     runtime.add_widget(
         build_metric_summary_widget(
@@ -117,7 +115,7 @@ async def handle_summarize_member_work_items(
         )
 
     items = await runtime.gateway.work_items.list_work_items(
-        runtime.scope, pid, assignee_id=mem_res.match.id, limit=200
+        pid, assignee_id=mem_res.match.id, limit=200
     )
     completed = sum(1 for w in items if w.completed)
     overdue = sum(1 for w in items if w.is_overdue and not w.completed)
@@ -158,7 +156,7 @@ async def handle_summarize_member_work_items(
 
 
 def build_analytics_tools() -> tuple[ProjectToolSpec, ...]:
-    """Build Tier-0 KPI analytics, overdue, member workload & health audit tools."""
+    """Build KPI analytics, overdue, member workload, and health audit tools."""
     return (
         ProjectToolSpec(
             name="get_workload_distribution",

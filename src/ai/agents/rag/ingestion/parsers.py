@@ -148,7 +148,7 @@ class DocxMarkdownParser:
 
 
 class ParserRegistry:
-    """OCP registry mapping file extensions and MIME types to DocumentParsers."""
+    """Registry mapping file extensions and MIME types to `DocumentParser` instances."""
 
     def __init__(self, parsers: tuple[DocumentParser, ...] = ()) -> None:
         self._by_ext: dict[str, DocumentParser] = {}

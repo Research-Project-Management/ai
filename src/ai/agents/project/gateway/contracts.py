@@ -1,4 +1,4 @@
-"""Zero-trust Hexagonal Port contracts & normalized DTOs for `project_agent`."""
+"""Gateway protocols and normalized DTOs for `project_agent`."""
 
 from __future__ import annotations
 
@@ -198,7 +198,6 @@ class ProjectsPort(Protocol):
 
     async def list_projects(
         self,
-        scope: ProjectScope,
         *,
         project_type: Literal["created", "shared", "all"] = "all",
         search: str = "",
@@ -206,15 +205,12 @@ class ProjectsPort(Protocol):
         is_archived: bool | None = None,
     ) -> list[ProjectSummary]: ...
 
-    async def get_project(self, scope: ProjectScope, project_id: str) -> ProjectSummary: ...
+    async def get_project(self, project_id: str) -> ProjectSummary: ...
 
-    async def get_project_overview(
-        self, scope: ProjectScope, project_id: str
-    ) -> ProjectOverview: ...
+    async def get_project_overview(self, project_id: str) -> ProjectOverview: ...
 
     async def update_project(
         self,
-        scope: ProjectScope,
         project_id: str,
         *,
         name: str | None = None,
@@ -227,7 +223,6 @@ class ProjectsPort(Protocol):
 
     async def list_members(
         self,
-        scope: ProjectScope,
         project_id: str,
         *,
         role: str | None = None,
@@ -237,7 +232,6 @@ class ProjectsPort(Protocol):
 
     async def add_member(
         self,
-        scope: ProjectScope,
         project_id: str,
         *,
         user_id: str,
@@ -246,26 +240,20 @@ class ProjectsPort(Protocol):
 
     async def update_member_role(
         self,
-        scope: ProjectScope,
         project_id: str,
         user_id: str,
         *,
         role: str,
     ) -> ProjectMember: ...
 
-    async def remove_member(
-        self, scope: ProjectScope, project_id: str, user_id: str
-    ) -> dict[str, Any]: ...
+    async def remove_member(self, project_id: str, user_id: str) -> dict[str, Any]: ...
 
-    async def list_workflow_states(
-        self, scope: ProjectScope, project_id: str
-    ) -> list[WorkflowState]: ...
+    async def list_workflow_states(self, project_id: str) -> list[WorkflowState]: ...
 
-    async def list_labels(self, scope: ProjectScope, project_id: str) -> list[ProjectLabel]: ...
+    async def list_labels(self, project_id: str) -> list[ProjectLabel]: ...
 
     async def create_label(
         self,
-        scope: ProjectScope,
         project_id: str,
         *,
         name: str,
@@ -273,13 +261,10 @@ class ProjectsPort(Protocol):
         description: str | None = None,
     ) -> ProjectLabel: ...
 
-    async def delete_label(
-        self, scope: ProjectScope, project_id: str, label_id: str
-    ) -> dict[str, Any]: ...
+    async def delete_label(self, project_id: str, label_id: str) -> dict[str, Any]: ...
 
     async def list_activity(
         self,
-        scope: ProjectScope,
         *,
         project_id: str | None = None,
         entity_type: str | None = None,
@@ -292,7 +277,6 @@ class WorkItemsPort(Protocol):
 
     async def list_work_items(
         self,
-        scope: ProjectScope,
         project_id: str,
         *,
         column_id: str | None = None,
@@ -307,17 +291,15 @@ class WorkItemsPort(Protocol):
 
     async def get_my_work_items(
         self,
-        scope: ProjectScope,
         *,
         project_id: str | None = None,
         relation: Literal["assigned", "created", "subscribed", "all"] = "assigned",
     ) -> list[WorkItemSummary]: ...
 
-    async def get_work_item(self, scope: ProjectScope, work_item_id: str) -> WorkItemSummary: ...
+    async def get_work_item(self, work_item_id: str) -> WorkItemSummary: ...
 
     async def create_work_item(
         self,
-        scope: ProjectScope,
         project_id: str,
         *,
         title: str,
@@ -334,7 +316,6 @@ class WorkItemsPort(Protocol):
 
     async def update_work_item(
         self,
-        scope: ProjectScope,
         work_item_id: str,
         *,
         title: str | None = None,
@@ -350,28 +331,22 @@ class WorkItemsPort(Protocol):
         labels: Sequence[str] | None = None,
     ) -> WorkItemSummary: ...
 
-    async def delete_work_item(self, scope: ProjectScope, work_item_id: str) -> dict[str, Any]: ...
+    async def delete_work_item(self, work_item_id: str) -> dict[str, Any]: ...
 
-    async def archive_work_item(
-        self, scope: ProjectScope, work_item_id: str
-    ) -> WorkItemSummary: ...
+    async def archive_work_item(self, work_item_id: str) -> WorkItemSummary: ...
 
     async def assign_work_item(
         self,
-        scope: ProjectScope,
         project_id: str,
         work_item_id: str,
         *,
         assignee_id: str | None = None,
     ) -> dict[str, Any]: ...
 
-    async def list_comments(
-        self, scope: ProjectScope, work_item_id: str
-    ) -> list[WorkItemComment]: ...
+    async def list_comments(self, work_item_id: str) -> list[WorkItemComment]: ...
 
     async def add_comment(
         self,
-        scope: ProjectScope,
         work_item_id: str,
         *,
         content: str,
@@ -382,13 +357,11 @@ class WorkItemsPort(Protocol):
 class AnalyticsPort(Protocol):
     """Project KPIs."""
 
-    async def get_project_analytics(
-        self, scope: ProjectScope, project_id: str
-    ) -> ProjectAnalytics: ...
+    async def get_project_analytics(self, project_id: str) -> ProjectAnalytics: ...
 
 
 class ProjectGateway(Protocol):
-    """Zero-trust Port between `project_agent` and Flux Project Backend APIs, one port per area."""
+    """Gateway protocol between `project_agent` and Flux Project Backend APIs, grouped by area."""
 
     @property
     def projects(self) -> ProjectsPort: ...

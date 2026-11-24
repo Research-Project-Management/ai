@@ -48,7 +48,7 @@ class LibraryToolSpec(BaseModel):
         validated_args: dict[str, Any],
         known_titles: dict[str, str],
     ) -> dict[str, Any]:
-        """Build human-readable confirmation payload owned polymorphically by the tool."""
+        """Build a human-readable confirmation payload for this tool."""
         if self.describe_confirmation is not None:
             return self.describe_confirmation(interrupt_id, validated_args, known_titles)
         return {
@@ -61,7 +61,7 @@ class LibraryToolSpec(BaseModel):
 
 
 class LibraryToolRegistry(ToolRegistry[LibraryToolSpec]):
-    """OCP registry of library tools used for planner formatting and policy gates."""
+    """Registry of library tools used for planner formatting and policy gates."""
 
     label = "library"
 

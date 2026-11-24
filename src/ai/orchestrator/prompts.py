@@ -4,7 +4,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from ai.orchestrator.citations import CITATION_INSTRUCTIONS, format_evidence_tag
-from ai.orchestrator.context_sections import DEFAULT_CONTEXT_COMPOSER
+from ai.orchestrator.context_sections import render_request_context
 from ai.orchestrator.contracts import AgentOutput
 
 DIRECT_RESPOND_SYSTEM_PROMPT = (
@@ -98,7 +98,7 @@ def build_supervisor_prompt(
     )
 
     volatile_parts: list[str] = []
-    context_block = DEFAULT_CONTEXT_COMPOSER.render(request_context).strip()
+    context_block = render_request_context(request_context).strip()
     if context_block:
         volatile_parts.append(context_block)
 

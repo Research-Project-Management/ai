@@ -8,13 +8,13 @@ from typing import Annotated
 
 from fastapi import Depends, Header, HTTPException, Request, status
 from langgraph.checkpoint.base import BaseCheckpointSaver
-from langgraph.store.base import BaseStore
 from pydantic import SecretStr
 
 from ai.agents.rag.ingestion.jobs import IngestionJobRunner
 from ai.agents.rag.ingestion.pipeline import IngestionPipeline
 from ai.agents.rag.retrieval.engine import RetrievalEngine
 from ai.api.schemas import ChatRequest, ResumeRequest
+from ai.bootstrap import AppContainer
 from ai.orchestrator.contracts import AgentRegistry, InputGuard
 from ai.shared.config.server import ServerConfig
 from ai.shared.contracts.auth import bind_delegation_token
@@ -22,86 +22,82 @@ from ai.shared.contracts.context import SpaceContext
 from ai.shared.contracts.health import HealthProbe
 from ai.shared.contracts.knowledge import KnowledgeStore
 from ai.shared.contracts.rate_limit import RateLimiter, RateLimitResult
-from ai.shared.contracts.run_control import FeedbackSink, RunCancellationRegistry
+from ai.shared.contracts.run_control import RunCancellationRegistry
 from ai.shared.llm.factory import LLMOverride, bind_llm_override
 from ai.shared.resilience.mutations import JournalStore, bind_turn_journal
 from ai.shared.resilience.observability import TokenBudget, TokenQuotaStatus, ToolExecutionMetrics
 from ai.shared.resilience.tool_runner import bind_tool_metrics
 
 
+def get_container(request: Request) -> AppContainer:
+    """Return the typed AppContainer attached during FastAPI lifespan startup."""
+    container: AppContainer = request.app.state.container
+    return container
+
+
 def get_server_config(request: Request) -> ServerConfig:
-    """Inject only ServerConfig from app state (Interface Segregation)."""
-    return request.app.state.settings.server
+    """Return ServerConfig from application container."""
+    return get_container(request).settings.server
 
 
 def get_rate_limiter(request: Request) -> RateLimiter:
-    """Inject the configured Space-scoped RateLimiter from app state."""
-    return request.app.state.rate_limiter
+    """Inject the configured Space-scoped RateLimiter from application container."""
+    return get_container(request).rate_limiter
 
 
 def get_token_budget(request: Request) -> TokenBudget:
-    """Inject the configured Space-scoped TokenBudget from app state."""
-    return request.app.state.token_budget
+    """Inject the configured Space-scoped TokenBudget from application container."""
+    return get_container(request).token_budget
 
 
 def get_health_probes(request: Request) -> tuple[HealthProbe, ...]:
-    """Inject registered infrastructure HealthProbes from app state."""
-    return request.app.state.health_probes
+    """Inject registered infrastructure HealthProbes from application container."""
+    return get_container(request).health_probes
 
 
 def get_cancel_registry(request: Request) -> RunCancellationRegistry:
-    """Inject active run cancellation registry from app state."""
-    return request.app.state.cancel_registry
-
-
-def get_memory_store(request: Request) -> BaseStore:
-    """Inject cross-thread long-term BaseStore from app state."""
-    return request.app.state.memory_store
+    """Inject active run cancellation registry from application container."""
+    return get_container(request).cancel_registry
 
 
 def get_knowledge_store(request: Request) -> KnowledgeStore:
-    """Inject space-isolated KnowledgeStore from app state."""
-    return request.app.state.knowledge_store
-
-
-def get_feedback_sink(request: Request) -> FeedbackSink:
-    """Inject run feedback collector from app state."""
-    return request.app.state.feedback_sink
+    """Inject space-isolated KnowledgeStore from application container."""
+    return get_container(request).knowledge_store
 
 
 def get_mutation_journal(request: Request) -> JournalStore:
-    """Inject per-turn mutation journal from app state."""
-    return request.app.state.mutation_journal
+    """Inject per-turn mutation journal from application container."""
+    return get_container(request).mutation_journal
 
 
 def get_input_guards(request: Request) -> tuple[InputGuard, ...]:
-    """Inject inbound message validation guards from app state."""
-    return request.app.state.input_guards
+    """Inject inbound message validation guards from application container."""
+    return get_container(request).input_guards
 
 
 def get_agent_registry(request: Request) -> AgentRegistry:
-    """Inject specialist AgentRegistry from app state."""
-    return request.app.state.agent_registry
+    """Inject specialist AgentRegistry from application container."""
+    return get_container(request).agent_registry
 
 
 def get_checkpointer(request: Request) -> BaseCheckpointSaver:
-    """Inject thread checkpointer from app state."""
-    return request.app.state.checkpointer
+    """Inject thread checkpointer from application container."""
+    return get_container(request).checkpointer
 
 
 def get_ingestion_pipeline(request: Request) -> IngestionPipeline:
-    """Inject write-side RAG IngestionPipeline from app state."""
-    return request.app.state.ingestion_pipeline
+    """Inject write-side RAG IngestionPipeline from application container."""
+    return get_container(request).ingestion_pipeline
 
 
 def get_ingestion_job_runner(request: Request) -> IngestionJobRunner:
-    """Inject bounded async IngestionJobRunner from app state."""
-    return request.app.state.ingestion_job_runner
+    """Inject bounded async IngestionJobRunner from application container."""
+    return get_container(request).ingestion_job_runner
 
 
 def get_retrieval_engine(request: Request) -> RetrievalEngine:
-    """Inject read-side RAG RetrievalEngine from app state."""
-    return request.app.state.retrieval_engine
+    """Inject read-side RAG RetrievalEngine from application container."""
+    return get_container(request).retrieval_engine
 
 
 def verify_internal_key(

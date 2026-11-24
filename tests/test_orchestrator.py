@@ -32,7 +32,8 @@ from ai.orchestrator.contracts import (
     RoutingDecision,
 )
 from ai.orchestrator.graph import build_root_graph
-from ai.orchestrator.planner import enforce_routing_invariants, parse_routing_decision
+from ai.orchestrator.planner import parse_routing_decision
+from ai.orchestrator.policies import DEFAULT_POLICIES, PolicyContext
 from ai.orchestrator.prompts import build_supervisor_prompt
 from ai.orchestrator.state import RootState
 from ai.shared.config.database import DatabaseConfig, PostgresConfig, QdrantConfig, RedisConfig
@@ -663,12 +664,14 @@ def test_enforce_routing_invariants_requires_reading_attached_sources_first() ->
         targets=(AgentTaskAssignment(agent="project_agent", instruction="Create 5 tasks"),),
         needs_followup=False,
     )
-    enforced_1 = enforce_routing_invariants(
+    enforced_1 = DEFAULT_POLICIES.apply(
         proj_decision,
-        query="tạo 5 tasks từ tài liệu trên",
-        request_context=indexed_ctx,
-        prior_outputs=(),
-        registry=registry,
+        PolicyContext(
+            query="tạo 5 tasks từ tài liệu trên",
+            request_context=indexed_ctx,
+            prior_outputs=(),
+            registry=registry,
+        ),
     )
     assert enforced_1.mode == "delegate"
     assert [t.agent for t in enforced_1.targets] == ["rag_agent"]
@@ -677,21 +680,25 @@ def test_enforce_routing_invariants_requires_reading_attached_sources_first() ->
 
     # 2. Direct (No-Retrieval) on round 1 is preserved untouched even when papers are attached
     direct_decision = RoutingDecision(mode="direct", reasoning="no retrieval needed")
-    enforced_2a = enforce_routing_invariants(
+    enforced_2a = DEFAULT_POLICIES.apply(
         direct_decision,
-        query="hi bro",
-        request_context=indexed_ctx,
-        prior_outputs=(),
-        registry=registry,
+        PolicyContext(
+            query="hi bro",
+            request_context=indexed_ctx,
+            prior_outputs=(),
+            registry=registry,
+        ),
     )
     assert enforced_2a == direct_decision
 
-    enforced_2b = enforce_routing_invariants(
+    enforced_2b = DEFAULT_POLICIES.apply(
         direct_decision,
-        query="explain gradient descent",
-        request_context=meta_only_ctx,
-        prior_outputs=(),
-        registry=registry,
+        PolicyContext(
+            query="explain gradient descent",
+            request_context=meta_only_ctx,
+            prior_outputs=(),
+            registry=registry,
+        ),
     )
     assert enforced_2b == direct_decision
 
@@ -699,12 +706,14 @@ def test_enforce_routing_invariants_requires_reading_attached_sources_first() ->
     from ai.shared.contracts.auth import bind_delegation_token
 
     with bind_delegation_token("Bearer test-jwt"):
-        enforced_2c = enforce_routing_invariants(
+        enforced_2c = DEFAULT_POLICIES.apply(
             proj_decision,
-            query="tạo 5 tasks từ tài liệu trên",
-            request_context=meta_only_ctx,
-            prior_outputs=(),
-            registry=registry,
+            PolicyContext(
+                query="tạo 5 tasks từ tài liệu trên",
+                request_context=meta_only_ctx,
+                prior_outputs=(),
+                registry=registry,
+            ),
         )
         assert enforced_2c.mode == "delegate"
         assert [t.agent for t in enforced_2c.targets] == ["library_agent"]
@@ -712,21 +721,43 @@ def test_enforce_routing_invariants_requires_reading_attached_sources_first() ->
         assert "item-1" in enforced_2c.targets[0].instruction
 
         # 3. Round 2 (prior_outputs non-empty) + project_agent -> untouched
-        enforced_3 = enforce_routing_invariants(
+        enforced_3 = DEFAULT_POLICIES.apply(
             proj_decision,
-            query="tạo 5 tasks từ tài liệu trên",
-            request_context=indexed_ctx,
-            prior_outputs=(AgentOutput(agent="rag_agent", content="Summary of paper"),),
-            registry=registry,
+            PolicyContext(
+                query="tạo 5 tasks từ tài liệu trên",
+                request_context=indexed_ctx,
+                prior_outputs=(AgentOutput(agent="rag_agent", content="Summary of paper"),),
+                registry=registry,
+            ),
         )
         assert enforced_3 == proj_decision
 
         # 4. No attached sources -> untouched
-        enforced_4 = enforce_routing_invariants(
+        enforced_4 = DEFAULT_POLICIES.apply(
             proj_decision,
-            query="create 5 tasks",
-            request_context={"project_id": "p-1"},
-            prior_outputs=(),
-            registry=registry,
+            PolicyContext(
+                query="create 5 tasks",
+                request_context={"project_id": "p-1"},
+                prior_outputs=(),
+                registry=registry,
+            ),
         )
         assert enforced_4 == proj_decision
+
+
+def test_sliding_window_truncation_preserves_message_metadata() -> None:
+    policy = SlidingWindowContextPolicy(max_messages=4, max_chars=200)
+    msg = HumanMessage(
+        content="x" * 500,
+        id="msg-42",
+        name="alice",
+        additional_kwargs={"trace": "t-1"},
+    )
+    selected = policy.select_messages([msg])
+    assert len(selected) == 1
+    truncated = selected[0]
+    assert isinstance(truncated, HumanMessage)
+    assert str(truncated.content).endswith("...[truncated]")
+    assert truncated.id == "msg-42"
+    assert truncated.name == "alice"
+    assert truncated.additional_kwargs == {"trace": "t-1"}

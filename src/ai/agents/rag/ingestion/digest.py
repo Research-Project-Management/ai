@@ -1,4 +1,4 @@
-"""Episodic Timeline Digest builder and upserter (CoALA Episodic Tier / ADR-001 Phase 3)."""
+"""Episodic timeline digest builder and upserter."""
 
 from __future__ import annotations
 
@@ -40,7 +40,7 @@ def build_timeline_digest_markdown(
     period_label: str,
     events: Sequence[TimelineEventInput],
 ) -> str:
-    """Render events chronologically into a compact CoALA episodic digest."""
+    """Render events chronologically into a compact episodic timeline digest."""
     ordered = sorted(events, key=lambda item: (item.effective_at.strip(), item.source_id.strip()))
     lines: list[str] = [f"# Project Timeline Digest: {period_label.strip()}"]
     for event in ordered:

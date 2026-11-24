@@ -192,14 +192,17 @@ async def test_threads_revert_endpoint_accepts_selective_entity_ids() -> None:
     app.include_router(threads.router)
     app.dependency_overrides[verify_internal_key] = lambda: None
     app.dependency_overrides[get_mutation_journal] = lambda: journal
-    app.state.settings = SimpleNamespace(
+    stub_settings = SimpleNamespace(
         project=SimpleNamespace(backend_url="http://backend.local"),
         server=SimpleNamespace(internal_api_key=SecretStr("test-key")),
     )
 
     with TestClient(app) as client:
         async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as mock_http:
-            app.state.shared_http_client = mock_http
+            app.state.container = SimpleNamespace(
+                settings=stub_settings,
+                shared_http_client=mock_http,
+            )
             res1 = client.post(
                 "/turns/tr-sel/revert?space_id=s1",
                 headers={"Authorization": "Bearer u-jwt"},
@@ -252,23 +255,19 @@ async def test_project_write_tools_record_update_comment_and_label_undos() -> No
     )
 
     class _FakeWorkItems:
-        async def get_work_item(self, _scope: ProjectScope, _work_item_id: str) -> WorkItemSummary:
+        async def get_work_item(self, _work_item_id: str) -> WorkItemSummary:
             return before_item
 
-        async def update_work_item(
-            self, _scope: ProjectScope, _work_item_id: str, **_kwargs: Any
-        ) -> WorkItemSummary:
+        async def update_work_item(self, _work_item_id: str, **_kwargs: Any) -> WorkItemSummary:
             return after_item
 
         async def add_comment(
-            self, _scope: ProjectScope, work_item_id: str, *, content: str, **_kwargs: Any
+            self, work_item_id: str, *, content: str, **_kwargs: Any
         ) -> WorkItemComment:
             return WorkItemComment(id="cmt-5", work_item_id=work_item_id, content=content)
 
     class _FakeProjects:
-        async def create_label(
-            self, _scope: ProjectScope, _pid: str, *, name: str, **_kwargs: Any
-        ) -> ProjectLabel:
+        async def create_label(self, _pid: str, *, name: str, **_kwargs: Any) -> ProjectLabel:
             return ProjectLabel(id="lbl-9", name=name)
 
     fake_gateway = cast(

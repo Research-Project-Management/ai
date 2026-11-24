@@ -1,4 +1,4 @@
-"""Generic OCP tool registry shared by every tool-using agent."""
+"""Generic tool registry shared by tool-using agents."""
 
 from __future__ import annotations
 
@@ -8,8 +8,8 @@ from typing import Any, Protocol
 from pydantic import BaseModel
 
 
-class RegistrableSpec(Protocol):
-    """Structural view of a tool spec the registry needs."""
+class ToolSpec(Protocol):
+    """Structural view of a tool spec shared across registry, gate, and executor."""
 
     @property
     def name(self) -> str: ...
@@ -17,6 +17,8 @@ class RegistrableSpec(Protocol):
     def description(self) -> str: ...
     @property
     def risk_tier(self) -> str: ...
+    @property
+    def idempotent(self) -> bool: ...
     @property
     def args_schema(self) -> type[BaseModel]: ...
 
@@ -31,7 +33,7 @@ def format_args_hint(schema_cls: type[BaseModel]) -> str:
     return ", ".join(parts) if parts else "(no args)"
 
 
-class ToolRegistry[S: RegistrableSpec]:
+class ToolRegistry[S: ToolSpec]:
     """Ordered, duplicate-checked catalog of tool specs used for planning and policy gates."""
 
     label: str = "tool"

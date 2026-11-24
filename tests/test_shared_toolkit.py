@@ -61,7 +61,7 @@ def test_default_app_wires_citation_guard_and_strips_phantom_markers() -> None:
 
     app = create_app(settings=_settings(), llm=RunnableLambda(_llm))
     with TestClient(app) as client:
-        assert any(isinstance(g, CitationIntegrityGuard) for g in app.state.output_guards)
+        assert any(isinstance(g, CitationIntegrityGuard) for g in app.state.container.output_guards)
         res = client.post(
             "/chat/sync",
             headers={"X-Internal-Key": "test-key"},
@@ -147,6 +147,7 @@ class _Spec(BaseModel):
     name: str
     description: str = "demo tool"
     risk_tier: str = "read"
+    idempotent: bool = True
     args_schema: type[BaseModel] = _Args
 
 
@@ -295,7 +296,7 @@ async def test_transport_translates_errors_through_factory() -> None:
 
 
 def test_latex_escape_is_math_aware() -> None:
-    from ai.shared.tabular.builder import _escape_latex_text
+    from ai.agents.editor.tabular.builder import _escape_latex_text
 
     assert _escape_latex_text("Acc_1 ($x_i$) 50%") == r"Acc\_1 ($x_i$) 50\%"
     assert _escape_latex_text(r"Already\_escaped") == r"Already\_escaped"
@@ -689,11 +690,15 @@ async def test_turn_mutation_journal_lifo_revert_and_endpoint() -> None:
         )
         return httpx.Response(200, json={"ok": True})
 
+    from dataclasses import replace
+
     app = create_app(settings=_settings(), llm=RunnableLambda(lambda _: AIMessage(content="ok")))
     with TestClient(app) as client:
         async with httpx.AsyncClient(transport=httpx.MockTransport(ok_handler)) as mock_http:
-            app.state.shared_http_client = mock_http
-            with bind_turn_journal(app.state.mutation_journal, space_id="s1", trace_id="tr-99"):
+            app.state.container = replace(app.state.container, shared_http_client=mock_http)
+            with bind_turn_journal(
+                app.state.container.mutation_journal, space_id="s1", trace_id="tr-99"
+            ):
                 record_turn_mutation(
                     MutationRecord(
                         tool="create_work_item",
@@ -726,7 +731,7 @@ async def test_turn_mutation_journal_lifo_revert_and_endpoint() -> None:
         assert body["reverted_count"] == 2
         assert [r["entity_id"] for r in body["results"]] == ["pg-b", "wi-a"]
         assert [r["status"] for r in body["results"]] == ["reverted", "reverted"]
-        assert app.state.mutation_journal.list_mutations("s1", "tr-99") == ()
+        assert app.state.container.mutation_journal.list_mutations("s1", "tr-99") == ()
         assert endpoint_calls == [
             ("DELETE", "/api/v1/pages/pages/pg-b", "Bearer user-revert-jwt"),
             ("DELETE", "/api/v1/work-items/wi-a", "Bearer user-revert-jwt"),

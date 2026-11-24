@@ -249,93 +249,6 @@ def test_active_run_cancellation_stops_sse_stream() -> None:
     assert "run.finished" not in event_names
 
 
-def test_long_term_store_crud_search_and_space_isolation() -> None:
-    app = create_app(settings=_test_settings(), llm=_stub_llm())
-    headers = {"X-Internal-Key": "test-key"}
-
-    with TestClient(app) as client:
-        put1 = client.put(
-            "/store/items",
-            headers=headers,
-            json={
-                "space_id": "s1",
-                "namespace": "prefs",
-                "key": "writing_style",
-                "value": {"tone": "concise", "lang": "vi"},
-            },
-        )
-        assert put1.status_code == 200
-        assert put1.json()["value"] == {"tone": "concise", "lang": "vi"}
-
-        put2 = client.put(
-            "/store/items",
-            headers=headers,
-            json={
-                "space_id": "s1",
-                "namespace": "facts",
-                "key": "domain",
-                "value": {"topic": "physics"},
-            },
-        )
-        assert put2.status_code == 200
-
-        put_s2 = client.put(
-            "/store/items",
-            headers=headers,
-            json={
-                "space_id": "s2",
-                "namespace": "prefs",
-                "key": "writing_style",
-                "value": {"tone": "formal", "lang": "en"},
-            },
-        )
-        assert put_s2.status_code == 200
-
-        get_ok = client.get(
-            "/store/items/writing_style?space_id=s1&namespace=prefs", headers=headers
-        )
-        assert get_ok.status_code == 200
-        assert get_ok.json()["value"]["tone"] == "concise"
-
-        get_wrong_ns = client.get(
-            "/store/items/writing_style?space_id=s2&namespace=facts",
-            headers=headers,
-        )
-        assert get_wrong_ns.status_code == 404
-
-        search_res = client.post(
-            "/store/search",
-            headers=headers,
-            json={"space_id": "s1", "namespace": "prefs", "filter": {"lang": "vi"}},
-        )
-        assert search_res.status_code == 200
-        assert [item["key"] for item in search_res.json()["items"]] == ["writing_style"]
-
-        del_one = client.delete(
-            "/store/items/writing_style?space_id=s1&namespace=prefs",
-            headers=headers,
-        )
-        assert del_one.status_code == 200
-        assert (
-            client.get(
-                "/store/items/writing_style?space_id=s1&namespace=prefs",
-                headers=headers,
-            ).status_code
-            == 404
-        )
-
-        purge_s1 = client.delete("/spaces/s1/store", headers=headers)
-        assert purge_s1.status_code == 200
-        assert purge_s1.json()["deleted_items"] == 1
-
-        still_in_s2 = client.get(
-            "/store/items/writing_style?space_id=s2&namespace=prefs",
-            headers=headers,
-        )
-        assert still_in_s2.status_code == 200
-        assert still_in_s2.json()["value"]["tone"] == "formal"
-
-
 def test_qdrant_hybrid_knowledge_upsert_idempotency_search_and_delete() -> None:
     app = create_app(settings=_test_settings(), llm=_stub_llm())
     headers = {"X-Internal-Key": "test-key"}
@@ -485,7 +398,7 @@ async def test_agents_discovery_specialist_timeout_and_tool_runner() -> None:
     assert attempts == 2
 
 
-def test_input_guard_citation_guard_token_usage_and_feedback() -> None:
+def test_input_guard_citation_guard_and_token_usage() -> None:
     async def citing_handler(state: RootState, config: RunnableConfig) -> AgentOutput:
         del state, config
         dup = CitationItem(source_id="doc-1", title="Spec", page=2, snippet="key clause")
@@ -540,27 +453,6 @@ def test_input_guard_citation_guard_token_usage_and_feedback() -> None:
         assert cited.status_code == 200
         assert len(cited.json()["citations"]) == 2
         assert [c["source_id"] for c in cited.json()["citations"]] == ["doc-1", "doc-2"]
-
-        fb_post = client.post(
-            "/runs/tr-guard-1/feedback",
-            headers=headers,
-            json={
-                "space_id": "s1",
-                "score": 1.0,
-                "comment": "accurate citations",
-                "category": "accuracy",
-            },
-        )
-        assert fb_post.status_code == 201
-        assert fb_post.json()["trace_id"] == "tr-guard-1"
-
-        fb_s1 = client.get("/runs/tr-guard-1/feedback?space_id=s1", headers=headers)
-        assert fb_s1.status_code == 200
-        assert len(fb_s1.json()["items"]) == 1
-
-        fb_s2 = client.get("/runs/tr-guard-1/feedback?space_id=s2", headers=headers)
-        assert fb_s2.status_code == 200
-        assert fb_s2.json()["items"] == []
 
     sse_app = create_app(
         settings=_test_settings(),

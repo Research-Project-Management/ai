@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from dataclasses import replace
 from typing import Any, cast
 
 import httpx
@@ -195,8 +196,8 @@ async def test_ingest_queue_full_returns_429() -> None:
             base_url="http://testserver",
         ) as client,
     ):
-        old_runner: IngestionJobRunner = app.state.ingestion_job_runner
-        app.state.ingestion_job_runner = runner
+        old_container = app.state.container
+        app.state.container = replace(old_container, ingestion_job_runner=runner)
         try:
             first = await client.post(
                 "/knowledge/ingest",
@@ -221,7 +222,7 @@ async def test_ingest_queue_full_returns_429() -> None:
         finally:
             gate.set()
             await runner.aclose()
-            app.state.ingestion_job_runner = old_runner
+            app.state.container = old_container
 
 
 async def test_redis_ingestion_job_store_round_trip() -> None:

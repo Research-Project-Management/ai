@@ -262,7 +262,7 @@ class SerperGoogleSearchProvider:
 
 
 class FallbackSearchProvider:
-    """Chain-of-Responsibility composite returning hits from the first healthy provider."""
+    """Composite provider returning hits from the first healthy backend in order."""
 
     def __init__(
         self,

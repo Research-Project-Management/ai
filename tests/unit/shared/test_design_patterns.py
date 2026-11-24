@@ -21,7 +21,7 @@ from ai.api.sse_translator import SseTranslator
 from ai.orchestrator.context_policy import SlidingWindowContextPolicy
 from ai.orchestrator.context_sections import (
     DEFAULT_CONTEXT_SECTIONS,
-    ContextPromptComposer,
+    render_request_context,
 )
 from ai.orchestrator.contracts import (
     AgentRegistry,
@@ -31,13 +31,13 @@ from ai.orchestrator.contracts import (
     RoutingDecision,
 )
 from ai.orchestrator.nodes import RootGraphNodes
-from ai.orchestrator.planner import enforce_routing_invariants
 from ai.orchestrator.policies import (
     AttachedSourcePolicy,
     PolicyChain,
     PolicyContext,
 )
 from ai.orchestrator.state import RootState
+from ai.shared.contracts.run_control import RunUsage
 from ai.shared.workflow.events import PATCH_PREVIEW, TOOL_COMPLETED, TOOL_STARTED
 
 
@@ -70,17 +70,18 @@ def test_policy_chain_composes_custom_and_attached_source_policies() -> None:
         targets=(AgentTaskAssignment(agent="project_agent", instruction="create tasks"),),
         reasoning="init",
     )
-    out = enforce_routing_invariants(
+    out = chain.apply(
         initial,
-        query="create 5 tasks",
-        request_context={
-            "attached_sources": [
-                {"kind": "library", "item_id": "it-1", "title": "Paper", "has_pdf": True}
-            ]
-        },
-        prior_outputs=(),
-        registry=registry,
-        policies=chain,
+        PolicyContext(
+            query="create 5 tasks",
+            request_context={
+                "attached_sources": [
+                    {"kind": "library", "item_id": "it-1", "title": "Paper", "has_pdf": True}
+                ]
+            },
+            prior_outputs=(),
+            registry=registry,
+        ),
     )
     assert out.mode == "delegate"
     assert [t.agent for t in out.targets] == ["rag_agent"]
@@ -211,18 +212,20 @@ def test_structure_auditor_runs_custom_and_default_rules() -> None:
     assert [p.package for p in report.missing_packages] == ["booktabs"]
 
 
-def test_context_prompt_composer_composes_custom_section() -> None:
-    class _VenueSection:
-        def render(self, request_context: Mapping[str, Any]) -> list[str]:
-            venue = str(request_context.get("venue") or "").strip()
-            return [f"- Target venue: {venue}"] if venue else []
+def test_render_request_context_composes_custom_section() -> None:
+    def _render_venue(request_context: Mapping[str, Any]) -> list[str]:
+        venue = str(request_context.get("venue") or "").strip()
+        return [f"- Target venue: {venue}"] if venue else []
 
-    composer = ContextPromptComposer((*DEFAULT_CONTEXT_SECTIONS, _VenueSection()))
-    rendered = composer.render({"project_id": "proj-1", "venue": "NeurIPS 2026"})
+    sections = (*DEFAULT_CONTEXT_SECTIONS, _render_venue)
+    rendered = render_request_context(
+        {"project_id": "proj-1", "venue": "NeurIPS 2026"},
+        sections=sections,
+    )
     assert "## Active Request Context" in rendered
     assert "- Active project_id: proj-1" in rendered
     assert "- Target venue: NeurIPS 2026" in rendered
-    assert composer.render(None) == ""
+    assert render_request_context(None, sections=sections) == ""
 
 
 @pytest.mark.asyncio
@@ -230,8 +233,8 @@ async def test_root_graph_nodes_turn_init_and_route_after_round() -> None:
     class _StubPlanner:
         async def plan(
             self, _state: RootState, _registry: AgentRegistry, _config: RunnableConfig
-        ) -> RoutingDecision:
-            return RoutingDecision(mode="direct")
+        ) -> tuple[RoutingDecision, RunUsage]:
+            return RoutingDecision(mode="direct"), RunUsage()
 
     nodes = RootGraphNodes(
         llm=RunnableLambda(lambda _x: AIMessage(content="ok")),

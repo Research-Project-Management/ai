@@ -1,4 +1,4 @@
-"""State-pattern Circuit Breaker and Registry protecting external tool dependencies."""
+"""Circuit breaker and registry protecting external tool dependencies."""
 
 from __future__ import annotations
 
@@ -27,10 +27,6 @@ class CircuitBreaker:
         self._opened_at: float | None = None
         self._half_open_in_flight: int = 0
         self._lock = asyncio.Lock()
-
-    @property
-    def config(self) -> CircuitBreakerConfig:
-        return self._config
 
     @property
     def state(self) -> CircuitState:

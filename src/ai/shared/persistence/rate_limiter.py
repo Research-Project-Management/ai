@@ -183,7 +183,7 @@ def build_rate_limiter(
     config: RateLimitConfig,
     redis_client: Redis | None,
 ) -> RateLimiter:
-    """Construct the configured per-space RateLimiter strategy."""
+    """Construct the configured per-space RateLimiter implementation."""
     if not config.enabled:
         return NoOpRateLimiter(limit=config.requests_per_window)
     if redis_client is None:

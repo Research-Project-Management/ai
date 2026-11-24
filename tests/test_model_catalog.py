@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import json
+
+import pytest
 from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage
 from langchain_core.runnables import RunnableLambda
@@ -95,3 +98,25 @@ def test_resolve_catalog_override_enforces_whitelist_and_byok_precedence() -> No
     assert chosen is not None
     assert chosen.api_key.get_secret_value() == "sk-user-byok"
     assert chosen.model == "custom-model"
+
+
+def test_catalog_env_override_caches_per_raw_value_and_fails_open(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    custom = [
+        {
+            "id": "custom-fast",
+            "label": "Custom Fast",
+            "provider": "Custom",
+            "tier": "fast",
+            "description": "Custom test model",
+        }
+    ]
+    monkeypatch.setenv("LLM_MODEL_CATALOG_JSON", json.dumps(custom))
+    assert [m.id for m in list_model_catalog()] == ["custom-fast"]
+
+    monkeypatch.setenv("LLM_MODEL_CATALOG_JSON", "{invalid json")
+    assert [m.id for m in list_model_catalog()] == [entry.id for entry in DEFAULT_CATALOG]
+
+    monkeypatch.delenv("LLM_MODEL_CATALOG_JSON", raising=False)
+    assert [m.id for m in list_model_catalog()] == [entry.id for entry in DEFAULT_CATALOG]

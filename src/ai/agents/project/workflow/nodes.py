@@ -1,11 +1,11 @@
-"""SRP workflow node class implementing the 5-node `project_agent` state machine."""
+"""Workflow node runner implementing the 5-node `project_agent` state machine."""
 
 from __future__ import annotations
 
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable
-from typing import Any, cast
+from typing import Any
 
 from langchain_core.runnables import RunnableConfig
 from pydantic import BaseModel
@@ -26,9 +26,6 @@ from ai.agents.project.tools.contracts import (
     ProjectToolResult,
     ProjectToolRuntime,
 )
-from ai.agents.project.workflow.contracts import (
-    ProjectAgentConfig,
-)
 from ai.agents.project.workflow.prompts import (
     build_planner_prompt,
     build_synthesizer_prompt,
@@ -39,7 +36,7 @@ from ai.shared.llm.factory import ChatRunnable
 from ai.shared.workflow.events import LangGraphToolEvents, ToolEventPublisher
 from ai.shared.workflow.execute import run_tool_batch
 from ai.shared.workflow.gate import build_confirmation_payload, run_policy_gate
-from ai.shared.workflow.plan import run_plan_step
+from ai.shared.workflow.plan import ToolAgentConfig, bind_planner_tools, run_plan_step
 from ai.shared.workflow.synthesize import format_conversation_tail, run_synthesize_step
 
 logger = logging.getLogger(__name__)
@@ -66,7 +63,7 @@ class ProjectWorkflowNodes:
         llm: ChatRunnable,
         gateway: ProjectGateway,
         tool_registry: ProjectToolRegistry,
-        agent_config: ProjectAgentConfig,
+        agent_config: ToolAgentConfig,
         event_publisher: ToolEventPublisher | None = None,
     ) -> None:
         self._llm = llm
@@ -75,17 +72,9 @@ class ProjectWorkflowNodes:
         self._agent_config = agent_config
         self._events: ToolEventPublisher = event_publisher or LangGraphToolEvents("project_agent")
         self._catalog_text = tool_registry.format_catalog()
-        self._openai_tools = tool_registry.to_openai_tools()
-        self._planner_llm: ChatRunnable = llm
-        self._native_tools_bound = False
-        bind_fn = getattr(llm, "bind_tools", None)
-        if self._openai_tools and callable(bind_fn):
-            try:
-                self._planner_llm = cast(ChatRunnable, bind_fn(self._openai_tools))
-                self._native_tools_bound = True
-            except (NotImplementedError, TypeError):
-                self._planner_llm = llm
-                self._native_tools_bound = False
+        self._planner_llm, self._native_tools_bound = bind_planner_tools(
+            llm, tool_registry.to_openai_tools()
+        )
 
     def _build_scope(self, state: ProjectState) -> ProjectScope:
         return ProjectScope(
@@ -113,19 +102,18 @@ class ProjectWorkflowNodes:
         raw_pid = state.get("project_id") or raw_ctx.get("project_id")
         project_id = str(raw_pid).strip() if isinstance(raw_pid, str) and raw_pid.strip() else None
 
-        scope = ProjectScope(space_id=space_id, project_id=project_id, user_id=user_id)
         projects: list[ProjectSummary] = _restore_models(
             state.get("projects_cache"), ProjectSummary
         )
         if not projects:
             try:
-                projects = await self._gateway.projects.list_projects(scope)
-            except (ProjectGatewayError, TimeoutError, OSError):
+                projects = await self._gateway.projects.list_projects()
+            except (ProjectGatewayError, TimeoutError, OSError) as exc:
+                logger.warning("project_agent hydration failed to list projects: %s", exc)
                 projects = []
 
         if not project_id and len(projects) == 1:
             project_id = projects[0].id
-            scope = ProjectScope(space_id=space_id, project_id=project_id, user_id=user_id)
 
         active_project: ProjectSummary | None = None
         states: list[WorkflowState] = []
@@ -139,15 +127,15 @@ class ProjectWorkflowNodes:
             )
             try:
                 if active_project is None:
-                    active_project = await self._gateway.projects.get_project(scope, project_id)
+                    active_project = await self._gateway.projects.get_project(project_id)
                 project_id = active_project.id or project_id
                 states, members, labels = await asyncio.gather(
-                    self._gateway.projects.list_workflow_states(scope, project_id),
-                    self._gateway.projects.list_members(scope, project_id, limit=100),
-                    self._gateway.projects.list_labels(scope, project_id),
+                    self._gateway.projects.list_workflow_states(project_id),
+                    self._gateway.projects.list_members(project_id, limit=100),
+                    self._gateway.projects.list_labels(project_id),
                 )
-            except (ProjectGatewayError, TimeoutError, OSError):
-                pass
+            except (ProjectGatewayError, TimeoutError, OSError) as exc:
+                logger.warning("project_agent hydration failed for project %s: %s", project_id, exc)
 
         snapshot = ProjectContextSnapshot(
             active_project=active_project,
@@ -281,7 +269,7 @@ def build_project_nodes(
     llm: ChatRunnable,
     gateway: ProjectGateway,
     tool_registry: ProjectToolRegistry,
-    agent_config: ProjectAgentConfig,
+    agent_config: ToolAgentConfig,
     event_publisher: ToolEventPublisher | None = None,
 ) -> dict[str, Callable[..., Awaitable[dict[str, Any]]]]:
     """Build pure async LangGraph node callables for `project_agent`."""

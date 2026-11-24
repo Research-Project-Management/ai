@@ -11,14 +11,7 @@ from ai.shared.config.base import EnvConfigBase, validate_http_url
 class LLMConfig(EnvConfigBase):
     """OpenAI-compatible primary LLM and fallback provider configuration."""
 
-    model_config = SettingsConfigDict(
-        env_file=".env",
-        env_file_encoding="utf-8",
-        env_prefix="LLM_",
-        extra="ignore",
-        frozen=True,
-        case_sensitive=False,
-    )
+    model_config = SettingsConfigDict(env_prefix="LLM_")
 
     base_url: str = ""
     api_key: SecretStr = Field(default=SecretStr(""))

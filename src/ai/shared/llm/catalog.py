@@ -5,9 +5,10 @@ from __future__ import annotations
 import json
 import logging
 import os
+from functools import lru_cache
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, SecretStr
+from pydantic import BaseModel, ConfigDict, SecretStr, ValidationError
 
 from ai.shared.config.llm import LLMConfig
 from ai.shared.llm.factory import LLMOverride
@@ -70,18 +71,23 @@ DEFAULT_CATALOG: tuple[ModelCatalogEntry, ...] = (
 )
 
 
-def _load_active_catalog() -> tuple[ModelCatalogEntry, ...]:
-    raw = (os.getenv("LLM_MODEL_CATALOG_JSON") or "").strip()
-    if not raw:
-        return DEFAULT_CATALOG
+@lru_cache(maxsize=4)
+def _parse_catalog_json(raw: str) -> tuple[ModelCatalogEntry, ...]:
     try:
         parsed = json.loads(raw)
         if not isinstance(parsed, list) or not parsed:
             raise ValueError("LLM_MODEL_CATALOG_JSON must be a non-empty JSON array")
         return tuple(ModelCatalogEntry.model_validate(item) for item in parsed)
-    except Exception as exc:  # noqa: BLE001 - fail-open to default catalog
+    except (json.JSONDecodeError, ValidationError, ValueError) as exc:
         logger.warning("Invalid LLM_MODEL_CATALOG_JSON, falling back to DEFAULT_CATALOG: %s", exc)
         return DEFAULT_CATALOG
+
+
+def _load_active_catalog() -> tuple[ModelCatalogEntry, ...]:
+    raw = (os.getenv("LLM_MODEL_CATALOG_JSON") or "").strip()
+    if not raw:
+        return DEFAULT_CATALOG
+    return _parse_catalog_json(raw)
 
 
 def list_model_catalog() -> list[ModelCatalogEntry]:

@@ -16,6 +16,7 @@ from ai.orchestrator.contracts import (
 from ai.orchestrator.nodes import RootGraphNodes
 from ai.orchestrator.state import RootState
 from ai.shared.contracts.auth import bind_delegation_token
+from ai.shared.contracts.run_control import RunUsage
 
 
 class _FixedPlanner(RoutePlanner):
@@ -27,9 +28,9 @@ class _FixedPlanner(RoutePlanner):
         state: RootState,
         registry: AgentRegistry,
         config: RunnableConfig,
-    ) -> RoutingDecision:
+    ) -> tuple[RoutingDecision, RunUsage]:
         del state, registry, config
-        return self._decision
+        return self._decision, RunUsage()
 
 
 def _build_nodes(

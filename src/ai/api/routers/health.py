@@ -1,32 +1,35 @@
 """Deep readiness and resilience observability endpoints."""
 
-import inspect
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, Request, Response, status
+from fastapi import APIRouter, Depends, Response, status
 
-from ai.api.dependencies import get_health_probes, get_server_config, verify_internal_key
+from ai.api.dependencies import (
+    get_container,
+    get_health_probes,
+    get_server_config,
+    get_token_budget,
+    verify_internal_key,
+)
 from ai.api.schemas import HealthResponse
+from ai.bootstrap import AppContainer
 from ai.shared.config.server import ServerConfig
 from ai.shared.contracts.health import HealthProbe
 from ai.shared.persistence.health import evaluate_health
+from ai.shared.resilience.observability import TokenBudget
 from ai.shared.resilience.prometheus import render_prometheus_metrics
 
 router = APIRouter(tags=["health"])
 
 
 def _collect_runtime_snapshots(
-    state: Any,
+    container: AppContainer,
 ) -> tuple[dict[str, str], dict[str, Any], dict[str, Any], dict[str, int]]:
-    breakers = getattr(state, "circuit_breakers", None)
-    tool_metrics = getattr(state, "tool_metrics", None)
-    llm_metrics = getattr(state, "llm_metrics", None)
-    ingestion_runner = getattr(state, "ingestion_job_runner", None)
     return (
-        breakers.snapshot() if breakers is not None else {},
-        tool_metrics.snapshot() if tool_metrics is not None else {},
-        llm_metrics.snapshot() if llm_metrics is not None else {},
-        ingestion_runner.snapshot() if ingestion_runner is not None else {},
+        container.circuit_breakers.snapshot(),
+        container.tool_metrics.snapshot(),
+        container.llm_metrics.snapshot(),
+        container.ingestion_job_runner.snapshot(),
     )
 
 
@@ -48,34 +51,27 @@ async def health(
 
 
 @router.get("/health/resilience", dependencies=[Depends(verify_internal_key)])
-async def resilience_health(request: Request) -> dict[str, Any]:
+async def resilience_health(
+    container: Annotated[AppContainer, Depends(get_container)],
+    token_budget: Annotated[TokenBudget, Depends(get_token_budget)],
+) -> dict[str, Any]:
     """Return Circuit Breaker states, tool & LLM metrics, queue depth, and token quotas."""
-    state = request.app.state
-    breakers, tool_metrics, llm_metrics, ingestion_queue = _collect_runtime_snapshots(state)
-    budget = getattr(state, "token_budget", None)
-
-    token_budget_snapshot: dict[str, Any] = {}
-    if budget is not None:
-        raw_snapshot = budget.snapshot()
-        token_budget_snapshot = (
-            await raw_snapshot if inspect.isawaitable(raw_snapshot) else raw_snapshot
-        )
-
+    breakers, tool_metrics, llm_metrics, ingestion_queue = _collect_runtime_snapshots(container)
     return {
         "circuit_breakers": breakers,
         "tool_metrics": tool_metrics,
         "llm_metrics": llm_metrics,
         "ingestion_queue": ingestion_queue,
-        "token_budget": token_budget_snapshot,
+        "token_budget": await token_budget.snapshot(),
     }
 
 
 @router.get("/metrics", dependencies=[Depends(verify_internal_key)])
-async def prometheus_metrics(request: Request) -> Response:
+async def prometheus_metrics(
+    container: Annotated[AppContainer, Depends(get_container)],
+) -> Response:
     """Expose runtime tool, LLM, breaker, and ingestion queue metrics in Prometheus 0.0.4 text."""
-    breakers, tool_metrics, llm_metrics, ingestion_queue = _collect_runtime_snapshots(
-        request.app.state
-    )
+    breakers, tool_metrics, llm_metrics, ingestion_queue = _collect_runtime_snapshots(container)
     payload = render_prometheus_metrics(
         tool_metrics=tool_metrics,
         llm_metrics=llm_metrics,

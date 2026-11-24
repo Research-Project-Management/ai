@@ -27,11 +27,10 @@ from ai.agents.library.gateway.contracts import (
 from ai.agents.library.gateway.http import HttpLibraryGateway
 from ai.agents.library.module import build_library_module
 from ai.agents.library.tools.contracts import build_default_tool_registry
-from ai.agents.library.workflow.contracts import LibraryAgentConfig
 from ai.main import create_app
+from ai.shared.config.agents import LibraryConfig
 from ai.shared.config.database import DatabaseConfig, PostgresConfig, QdrantConfig, RedisConfig
 from ai.shared.config.embedding import EmbeddingConfig
-from ai.shared.config.library import LibraryConfig
 from ai.shared.config.llm import LLMConfig
 from ai.shared.config.server import AppEnvironment, ServerConfig
 from ai.shared.config.settings import Settings
@@ -42,6 +41,7 @@ from ai.shared.contracts.hitl import (
     requires_confirmation,
 )
 from ai.shared.llm.factory import ChatRunnable
+from ai.shared.workflow.plan import ToolAgentConfig
 
 
 def _test_settings(*, hitl_policy: str = "destructive") -> Settings:
@@ -825,7 +825,7 @@ def test_default_bootstrap_registers_library_agent_and_slice_isolation() -> None
 
 
 def test_action_plan_sanitization_with_config() -> None:
-    cfg = LibraryAgentConfig(max_steps=4, hitl_policy="destructive")
+    cfg = ToolAgentConfig(max_steps=4, hitl_policy="destructive")
     assert cfg.max_steps == 4
 
 

@@ -111,15 +111,18 @@ async def test_threads_checkpoints_and_rewind_endpoints_with_saga_undo() -> None
     app.dependency_overrides[verify_internal_key] = lambda: None
     app.dependency_overrides[get_checkpointer] = lambda: saver
     app.dependency_overrides[get_mutation_journal] = lambda: journal
-    app.state.root_graph = graph
-    app.state.settings = SimpleNamespace(
+    test_settings = SimpleNamespace(
         project=SimpleNamespace(backend_url="http://backend.local"),
         server=SimpleNamespace(internal_api_key=SecretStr("test-key")),
     )
 
     with TestClient(app) as client:
         async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as mock_http:
-            app.state.shared_http_client = mock_http
+            app.state.container = SimpleNamespace(
+                root_graph=graph,
+                settings=test_settings,
+                shared_http_client=mock_http,
+            )
             list_res = client.get("/threads/th-ep/checkpoints?space_id=sp-ep&limit=10")
             assert list_res.status_code == 200
             ckpts = list_res.json()["checkpoints"]

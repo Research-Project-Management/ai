@@ -17,6 +17,7 @@ def test_is_current_state_query_distinguishes_updates_from_timelines() -> None:
     assert _is_current_state_query("What is the active current policy as of now?")
     assert not _is_current_state_query("Trình tự thay đổi max_concurrency từ tháng 3 đến tháng 12?")
     assert not _is_current_state_query("Trước khi sự cố INC-064 xảy ra, hệ thống làm gì?")
+    assert not _is_current_state_query("How does the interactive UI handle inactive sessions?")
 
 
 async def test_bitemporal_superseding_and_current_state_ranking() -> None:

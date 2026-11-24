@@ -23,6 +23,13 @@ from ai.shared.gateway.transport import BackendTransport
 _EXPORT_FORMATS: Final[frozenset[str]] = frozenset(
     {"bibtex", "ris", "csl-json", "csl_json", "csv", "markdown"}
 )
+_MAX_OVERVIEW_TAGS: Final[int] = 50
+_MAX_ITEM_NOTES: Final[int] = 10
+_MAX_NOTE_CONTENT_CHARS: Final[int] = 600
+_MAX_ITEM_RELATIONS: Final[int] = 15
+_MAX_ABSTRACT_CHARS: Final[int] = 1500
+_MAX_AUDIT_ENTRIES: Final[int] = 20
+_MAX_CITE_BATCH_IDS: Final[int] = 100
 
 
 class LibraryReader:
@@ -94,7 +101,7 @@ class LibraryReader:
         raw_tags = tags_raw.get("tags", []) if isinstance(tags_raw, dict) else tags_raw
         tags: list[TagSummary] = []
         if isinstance(raw_tags, list):
-            for entry in raw_tags[:50]:
+            for entry in raw_tags[:_MAX_OVERVIEW_TAGS]:
                 if isinstance(entry, dict) and str(entry.get("name") or "").strip():
                     tags.append(
                         TagSummary(
@@ -147,14 +154,14 @@ class LibraryReader:
                 notes_raw.get("notes", notes_raw) if isinstance(notes_raw, dict) else notes_raw
             )
             if isinstance(raw_note_list, list):
-                for note in raw_note_list[:10]:
+                for note in raw_note_list[:_MAX_ITEM_NOTES]:
                     if isinstance(note, dict):
                         notes.append(
                             {
                                 "id": str(note.get("id") or ""),
                                 "title": str(note.get("title") or ""),
                                 "content": str(note.get("contentMd") or note.get("content") or "")[
-                                    :600
+                                    :_MAX_NOTE_CONTENT_CHARS
                                 ],
                             }
                         )
@@ -164,7 +171,7 @@ class LibraryReader:
                 rel_raw.get("relations", rel_raw) if isinstance(rel_raw, dict) else rel_raw
             )
             if isinstance(raw_rel_list, list):
-                for rel in raw_rel_list[:15]:
+                for rel in raw_rel_list[:_MAX_ITEM_RELATIONS]:
                     if isinstance(rel, dict):
                         relations.append(
                             {
@@ -175,7 +182,7 @@ class LibraryReader:
                         )
 
         abstract = str(item_raw.get("abstract") or item_raw.get("abstractNote") or "").strip()[
-            :1500
+            :_MAX_ABSTRACT_CHARS
         ]
         attachments = item_raw.get("attachments")
         attachment_count = (
@@ -217,11 +224,13 @@ class LibraryReader:
         report: dict[str, Any] = {}
         for key, val in zip(keys, values, strict=True):
             if isinstance(val, list):
-                report[key] = val[:20]
+                report[key] = val[:_MAX_AUDIT_ENTRIES]
             elif isinstance(val, dict):
                 compact: dict[str, Any] = {}
                 for sub_k, sub_v in val.items():
-                    compact[sub_k] = sub_v[:20] if isinstance(sub_v, list) else sub_v
+                    compact[sub_k] = (
+                        sub_v[:_MAX_AUDIT_ENTRIES] if isinstance(sub_v, list) else sub_v
+                    )
                 report[key] = compact
             else:
                 report[key] = val
@@ -236,7 +245,7 @@ class LibraryReader:
         export_format: str | None = None,
     ) -> dict[str, Any]:
         fmt = (export_format or "").strip().lower()
-        clean_ids = [str(i).strip() for i in item_ids if str(i).strip()][:100]
+        clean_ids = [str(i).strip() for i in item_ids if str(i).strip()][:_MAX_CITE_BATCH_IDS]
 
         if fmt in _EXPORT_FORMATS:
             if clean_ids:

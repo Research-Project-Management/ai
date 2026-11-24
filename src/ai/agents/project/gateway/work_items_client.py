@@ -8,7 +8,6 @@ from typing import Any, Literal
 
 from ai.agents.project.gateway.contracts import (
     ProjectGatewayError,
-    ProjectScope,
     WorkItemComment,
     WorkItemSummary,
 )
@@ -16,6 +15,7 @@ from ai.agents.project.gateway.transport import (
     as_dict,
     encode_seg,
     unwrap_nested_dict,
+    work_item_route,
 )
 from ai.shared.gateway.transport import BackendTransport
 
@@ -146,7 +146,6 @@ class WorkItemsClient:
 
     async def list_work_items(
         self,
-        scope: ProjectScope,
         project_id: str,
         *,
         column_id: str | None = None,
@@ -158,7 +157,6 @@ class WorkItemsClient:
         search: str = "",
         limit: int = 50,
     ) -> list[WorkItemSummary]:
-        del scope
         params: dict[str, Any] = {
             "columnId": column_id.strip() if column_id else None,
             "stateGroup": state_group.strip().lower() if state_group else None,
@@ -185,12 +183,10 @@ class WorkItemsClient:
 
     async def get_my_work_items(
         self,
-        scope: ProjectScope,
         *,
         project_id: str | None = None,
         relation: Literal["assigned", "created", "subscribed", "all"] = "assigned",
     ) -> list[WorkItemSummary]:
-        del scope
         path = (
             f"/api/v1/analytics/projects/{encode_seg(project_id)}/your-work"
             if project_id and project_id.strip()
@@ -216,17 +212,12 @@ class WorkItemsClient:
                     items.append(parsed)
         return items
 
-    async def get_work_item(self, scope: ProjectScope, work_item_id: str) -> WorkItemSummary:
-        del scope
-        raw = await self._transport.request(
-            "GET",
-            f"/api/v1/work-items/{encode_seg(work_item_id)}",
-        )
+    async def get_work_item(self, work_item_id: str) -> WorkItemSummary:
+        raw = await self._transport.request("GET", work_item_route(work_item_id))
         return _parse_work_item(_extract_work_item_dict(raw))
 
     async def create_work_item(
         self,
-        scope: ProjectScope,
         project_id: str,
         *,
         title: str,
@@ -240,7 +231,6 @@ class WorkItemsClient:
         labels: Sequence[str] = (),
         parent_work_item_id: str | None = None,
     ) -> WorkItemSummary:
-        del scope
         body: dict[str, Any] = {"title": title.strip()}
         if description is not None:
             body["description"] = description
@@ -270,7 +260,6 @@ class WorkItemsClient:
 
     async def update_work_item(
         self,
-        scope: ProjectScope,
         work_item_id: str,
         *,
         title: str | None = None,
@@ -285,7 +274,6 @@ class WorkItemsClient:
         label_ids: Sequence[str] | None = None,
         labels: Sequence[str] | None = None,
     ) -> WorkItemSummary:
-        del scope
         body: dict[str, Any] = {}
         if title is not None:
             body["title"] = title.strip()
@@ -312,36 +300,26 @@ class WorkItemsClient:
 
         raw = await self._transport.request(
             "PUT",
-            f"/api/v1/work-items/{encode_seg(work_item_id)}",
+            work_item_route(work_item_id),
             json_body=body,
         )
         return _parse_work_item(_extract_work_item_dict(raw))
 
-    async def delete_work_item(self, scope: ProjectScope, work_item_id: str) -> dict[str, Any]:
-        del scope
-        raw = await self._transport.request(
-            "DELETE",
-            f"/api/v1/work-items/{encode_seg(work_item_id)}",
-        )
+    async def delete_work_item(self, work_item_id: str) -> dict[str, Any]:
+        raw = await self._transport.request("DELETE", work_item_route(work_item_id))
         return raw if isinstance(raw, dict) else {"message": "Work item deleted"}
 
-    async def archive_work_item(self, scope: ProjectScope, work_item_id: str) -> WorkItemSummary:
-        del scope
-        raw = await self._transport.request(
-            "POST",
-            f"/api/v1/work-items/{encode_seg(work_item_id)}/archive",
-        )
+    async def archive_work_item(self, work_item_id: str) -> WorkItemSummary:
+        raw = await self._transport.request("POST", f"{work_item_route(work_item_id)}/archive")
         return _parse_work_item(_extract_work_item_dict(raw))
 
     async def assign_work_item(
         self,
-        scope: ProjectScope,
         project_id: str,
         work_item_id: str,
         *,
         assignee_id: str | None = None,
     ) -> dict[str, Any]:
-        del scope
         base = f"/api/v1/projects/{encode_seg(project_id)}/work-items/{encode_seg(work_item_id)}"
         if assignee_id:
             raw = await self._transport.request(
@@ -353,8 +331,7 @@ class WorkItemsClient:
             raw = await self._transport.request("POST", f"{base}/unassign")
         return raw if isinstance(raw, dict) else {"newAssigneeId": assignee_id}
 
-    async def list_comments(self, scope: ProjectScope, work_item_id: str) -> list[WorkItemComment]:
-        del scope
+    async def list_comments(self, work_item_id: str) -> list[WorkItemComment]:
         raw = await self._transport.request(
             "GET",
             f"/api/v1/work-items/{encode_seg(work_item_id)}/comments",
@@ -366,13 +343,11 @@ class WorkItemsClient:
 
     async def add_comment(
         self,
-        scope: ProjectScope,
         work_item_id: str,
         *,
         content: str,
         project_id: str | None = None,
     ) -> WorkItemComment:
-        del scope
         body: dict[str, Any] = {"content": content.strip()}
         if project_id:
             body["projectId"] = project_id.strip()

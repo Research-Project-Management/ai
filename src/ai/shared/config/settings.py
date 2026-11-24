@@ -4,12 +4,10 @@ from typing import Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from ai.shared.config.agents import EditorConfig, LibraryConfig, ProjectConfig
 from ai.shared.config.database import DatabaseConfig
-from ai.shared.config.editor import EditorConfig
 from ai.shared.config.embedding import EmbeddingConfig
-from ai.shared.config.library import LibraryConfig
 from ai.shared.config.llm import LLMConfig
-from ai.shared.config.project import ProjectConfig
 from ai.shared.config.rag import IngestionConfig, RerankConfig
 from ai.shared.config.rate_limit import RateLimitConfig
 from ai.shared.config.server import ServerConfig
@@ -48,7 +46,7 @@ class Settings(BaseModel):
 
 
 def load_settings() -> Settings:
-    """Pure factory to load and validate settings at the Composition Root."""
+    """Load and validate application settings from environment variables."""
     return Settings()
 
 

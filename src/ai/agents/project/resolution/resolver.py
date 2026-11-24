@@ -1,4 +1,4 @@
-"""Chain of Responsibility resolver mapping user names/slugs into exact Backend UUIDs."""
+"""Ordered matcher pipeline resolving user names and slugs into Backend UUIDs."""
 
 from __future__ import annotations
 

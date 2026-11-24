@@ -1,9 +1,10 @@
 """Read-side RetrievalEngine: parallel multi-query RRF merge, rerank, and reverse repack."""
 
 import asyncio
+import re
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
-from typing import Any, Literal
+from typing import Any, Final
 
 from ai.agents.rag.retrieval.contracts import (
     RankedPassage,
@@ -13,6 +14,12 @@ from ai.agents.rag.retrieval.contracts import (
 )
 from ai.shared.contracts.knowledge import KnowledgeHit, KnowledgeStore
 from ai.shared.resilience.tool_runner import execute_tool_safely
+
+_TIMELINE_DIGEST_BOOST: Final[float] = 1.35
+_SUPERSEDED_DECAY: Final[float] = 0.65
+_ACTIVE_BASE_BOOST: Final[float] = 1.20
+_RECENCY_MAX_BONUS: Final[float] = 0.15
+_POLICY_SOURCE_BONUS: Final[float] = 0.10
 
 
 def filter_and_repack(
@@ -70,18 +77,28 @@ _SYNTHESIS_TIMELINE_CUES: tuple[str, ...] = (
 )
 
 
+def _compile_cue_pattern(cues: Sequence[str]) -> re.Pattern[str]:
+    return re.compile(
+        r"\b(?:" + "|".join(re.escape(cue) for cue in cues) + r")\b",
+        re.IGNORECASE,
+    )
+
+
+_CURRENT_STATE_CUE_RE: Final[re.Pattern[str]] = _compile_cue_pattern(_CURRENT_STATE_CUES)
+_TIMELINE_CUE_RE: Final[re.Pattern[str]] = _compile_cue_pattern(_TIMELINE_CUES)
+_SYNTHESIS_TIMELINE_CUE_RE: Final[re.Pattern[str]] = _compile_cue_pattern(_SYNTHESIS_TIMELINE_CUES)
+
+
 def _is_current_state_query(query: str) -> bool:
     """Return True when query asks for latest active truth rather than full timeline history."""
-    lowered = query.lower()
-    has_current = any(cue in lowered for cue in _CURRENT_STATE_CUES)
-    has_timeline = any(cue in lowered for cue in _TIMELINE_CUES)
+    has_current = bool(_CURRENT_STATE_CUE_RE.search(query))
+    has_timeline = bool(_TIMELINE_CUE_RE.search(query))
     return has_current and not has_timeline
 
 
 def _is_timeline_query(query: str) -> bool:
     """Return True when query synthesizes trends, sequences, or cross-quarter evolution."""
-    lowered = query.lower()
-    return any(cue in lowered for cue in _SYNTHESIS_TIMELINE_CUES)
+    return bool(_SYNTHESIS_TIMELINE_CUE_RE.search(query))
 
 
 def _parse_valid_ts(metadata: Mapping[str, Any]) -> float | None:
@@ -120,36 +137,35 @@ def _temporal_multiplier(
 ) -> float:
     if not is_current_query:
         if is_timeline_query and source_type == "timeline_digest":
-            return 1.35
+            return _TIMELINE_DIGEST_BOOST
         return 1.0
 
     lifecycle = str(metadata.get("lifecycle_status") or "active").lower()
     if lifecycle in {"superseded", "archived"}:
-        return 0.65
+        return _SUPERSEDED_DECAY
 
     recency_bonus = 0.0
     ts = _parse_valid_ts(metadata)
     if ts is not None and max_ts > min_ts:
-        recency_bonus = 0.15 * ((ts - min_ts) / (max_ts - min_ts))
-    policy_bonus = 0.10 if source_type == "policy" else 0.0
-    return 1.20 + recency_bonus + policy_bonus
+        recency_bonus = _RECENCY_MAX_BONUS * ((ts - min_ts) / (max_ts - min_ts))
+    policy_bonus = _POLICY_SOURCE_BONUS if source_type == "policy" else 0.0
+    return _ACTIVE_BASE_BOOST + recency_bonus + policy_bonus
 
 
-def _apply_temporal_adjustment[T: (KnowledgeHit, RankedPassage)](
-    items: Sequence[T],
+def _apply_temporal_adjustment(
+    items: Sequence[RankedPassage],
     *,
-    score_attr: Literal["score", "rerank_score"],
     is_current_query: bool,
     is_timeline_query: bool = False,
-) -> list[T]:
+) -> list[RankedPassage]:
     if (not is_current_query and not is_timeline_query) or not items:
         return list(items)
     min_ts, max_ts = _temporal_bounds(items)
-    adjusted: list[T] = [
+    adjusted: list[RankedPassage] = [
         item.model_copy(
             update={
-                score_attr: round(
-                    float(getattr(item, score_attr))
+                "rerank_score": round(
+                    item.rerank_score
                     * _temporal_multiplier(
                         metadata=item.metadata,
                         source_type=item.source_type,
@@ -164,7 +180,7 @@ def _apply_temporal_adjustment[T: (KnowledgeHit, RankedPassage)](
         )
         for item in items
     ]
-    adjusted.sort(key=lambda item: float(getattr(item, score_attr)), reverse=True)
+    adjusted.sort(key=lambda item: item.rerank_score, reverse=True)
     return adjusted
 
 
@@ -317,25 +333,18 @@ class RetrievalEngine:
         combined_query = " ".join((query.primary_query, *query.expanded_queries))
         is_current_query = _is_current_state_query(combined_query)
         is_timeline_query = (not is_current_query) and _is_timeline_query(combined_query)
-        adjusted_candidates = _apply_temporal_adjustment(
-            fused_candidates,
-            score_attr="score",
-            is_current_query=is_current_query,
-            is_timeline_query=is_timeline_query,
-        )
         rerank_k = (
-            min(len(adjusted_candidates), max(top_k * 2, 12))
+            min(len(fused_candidates), max(top_k * 2, 12))
             if (is_current_query or is_timeline_query or len(distinct_sources) > 1)
-            else min(top_k, len(adjusted_candidates))
+            else min(top_k, len(fused_candidates))
         )
         reranked = await self._reranker.rerank(
             query.primary_query,
-            adjusted_candidates[:pool_limit],
+            fused_candidates[:pool_limit],
             top_k=rerank_k,
         )
         adjusted_reranked = _apply_temporal_adjustment(
             reranked,
-            score_attr="rerank_score",
             is_current_query=is_current_query,
             is_timeline_query=is_timeline_query,
         )

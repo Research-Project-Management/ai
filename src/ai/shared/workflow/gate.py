@@ -3,36 +3,17 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
-from typing import Any, Protocol
+from typing import Any
 
 from langgraph.types import interrupt
-from pydantic import BaseModel, ValidationError
+from pydantic import ValidationError
 
 from ai.shared.contracts.hitl import (
     is_blocked_by_policy,
     parse_hitl_approval,
     requires_confirmation,
 )
-
-
-class GatedToolSpec(Protocol):
-    """Structural view of a tool spec the gate needs (satisfied by every agent's spec)."""
-
-    @property
-    def name(self) -> str: ...
-    @property
-    def risk_tier(self) -> str: ...
-    @property
-    def args_schema(self) -> type[BaseModel]: ...
-
-
-class ConfirmableToolSpec(Protocol):
-    """Tool spec capable of formatting a human confirmation prompt for HITL approval."""
-
-    @property
-    def name(self) -> str: ...
-    def format_confirmation(self, args: dict[str, Any]) -> str: ...
-
+from ai.shared.workflow.registry import ToolSpec
 
 ConfirmationBuilder = Callable[[Any, str, dict[str, Any]], dict[str, Any]]
 
@@ -40,7 +21,7 @@ ConfirmationBuilder = Callable[[Any, str, dict[str, Any]], dict[str, Any]]
 def build_confirmation_payload(
     *,
     interrupt_id: str,
-    spec: ConfirmableToolSpec,
+    spec: Any,
     validated_args: dict[str, Any],
 ) -> dict[str, Any]:
     """Build the standard LangGraph HITL confirmation interrupt payload."""
@@ -75,7 +56,7 @@ def run_policy_gate(
     for idx, call in enumerate(pending):
         tool_name = str(call.get("tool") or "").strip()
         raw_args = call.get("args") if isinstance(call.get("args"), dict) else {}
-        spec: GatedToolSpec | None = get_spec(tool_name)
+        spec: ToolSpec | None = get_spec(tool_name)
         if spec is None:
             new_observations.append(
                 {
@@ -135,9 +116,8 @@ def run_policy_gate(
 
 
 __all__ = [
-    "ConfirmableToolSpec",
     "ConfirmationBuilder",
-    "GatedToolSpec",
+    "ToolSpec",
     "build_confirmation_payload",
     "run_policy_gate",
 ]

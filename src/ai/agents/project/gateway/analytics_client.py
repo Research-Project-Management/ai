@@ -5,7 +5,6 @@ from __future__ import annotations
 from ai.agents.project.gateway.contracts import (
     ProjectAnalytics,
     ProjectGatewayError,
-    ProjectScope,
 )
 from ai.shared.gateway.transport import BackendTransport, encode_seg
 
@@ -16,8 +15,7 @@ class AnalyticsClient:
     def __init__(self, transport: BackendTransport) -> None:
         self._transport = transport
 
-    async def get_project_analytics(self, scope: ProjectScope, project_id: str) -> ProjectAnalytics:
-        del scope
+    async def get_project_analytics(self, project_id: str) -> ProjectAnalytics:
         raw = await self._transport.request(
             "GET",
             f"/api/v1/projects/{encode_seg(project_id)}/analytics",

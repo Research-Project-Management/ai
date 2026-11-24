@@ -90,16 +90,16 @@ async def test_root_graph_includes_router_usage_in_direct_turn() -> None:
     assert usage.total_tokens == 145
 
 
-async def test_custom_route_planner_without_usage_method_remains_compatible() -> None:
+async def test_custom_route_planner_returns_decision_and_usage() -> None:
     class _PlainPlanner:
         async def plan(
             self,
             state: Any,
             registry: AgentRegistry,
             config: RunnableConfig,
-        ) -> RoutingDecision:
+        ) -> tuple[RoutingDecision, RunUsage]:
             del state, registry, config
-            return RoutingDecision(mode="direct", reasoning="plain planner")
+            return RoutingDecision(mode="direct", reasoning="plain planner"), RunUsage()
 
     def _main(_inp: LanguageModelInput) -> AIMessage:
         return AIMessage(

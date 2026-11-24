@@ -1,4 +1,4 @@
-"""Tool-progress events shared by every tool-using agent (Observer over LangGraph custom events).
+"""Tool-progress events shared by tool-using agents over LangGraph custom events.
 
 Every agent emits the same two events, carrying its own name in the payload:
 `tool.started {tool, agent, input?}` and `tool.completed {tool, agent, status, error?}`.

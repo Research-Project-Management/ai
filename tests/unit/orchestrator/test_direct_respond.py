@@ -11,6 +11,7 @@ from ai.orchestrator.contracts import AgentRegistry, RoutePlanner, RoutingDecisi
 from ai.orchestrator.nodes import RootGraphNodes
 from ai.orchestrator.prompts import DIRECT_RESPOND_SYSTEM_PROMPT
 from ai.orchestrator.state import RootState
+from ai.shared.contracts.run_control import RunUsage
 
 
 class _NoopPlanner(RoutePlanner):
@@ -19,9 +20,9 @@ class _NoopPlanner(RoutePlanner):
         state: RootState,
         registry: AgentRegistry,
         config: RunnableConfig,
-    ) -> RoutingDecision:
+    ) -> tuple[RoutingDecision, RunUsage]:
         del state, registry, config
-        return RoutingDecision(mode="direct", targets=(), needs_followup=False)
+        return RoutingDecision(mode="direct", targets=(), needs_followup=False), RunUsage()
 
 
 async def test_direct_respond_prepends_flux_identity_and_language_system_prompt() -> None:

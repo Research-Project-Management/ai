@@ -10,13 +10,13 @@ from ai.agents.project.gateway.contracts import (
     ProjectLabel,
     ProjectMember,
     ProjectOverview,
-    ProjectScope,
     ProjectSummary,
     WorkflowState,
 )
 from ai.agents.project.gateway.transport import (
     as_dict,
     encode_seg,
+    project_label_route,
     unwrap_nested_dict,
 )
 from ai.shared.gateway.transport import BackendTransport
@@ -116,14 +116,12 @@ class ProjectsClient:
 
     async def list_projects(
         self,
-        scope: ProjectScope,
         *,
         project_type: Literal["created", "shared", "all"] = "all",
         search: str = "",
         priority: str | None = None,
         is_archived: bool | None = None,
     ) -> list[ProjectSummary]:
-        del scope
         params: dict[str, Any] = {
             "type": project_type,
             "search": search.strip() or None,
@@ -140,8 +138,7 @@ class ProjectsClient:
             _parse_project(item) for item in entries if isinstance(item, dict) and item.get("id")
         ]
 
-    async def get_project(self, scope: ProjectScope, project_id: str) -> ProjectSummary:
-        del scope
+    async def get_project(self, project_id: str) -> ProjectSummary:
         raw = await self._transport.request("GET", f"/api/v1/projects/{encode_seg(project_id)}")
         if not isinstance(raw, dict):
             raise ProjectGatewayError(502, "Unexpected project detail payload from Backend")
@@ -151,8 +148,7 @@ class ProjectsClient:
             return parsed.model_copy(update={"your_role": str(raw["yourRole"])})
         return parsed
 
-    async def get_project_overview(self, scope: ProjectScope, project_id: str) -> ProjectOverview:
-        del scope
+    async def get_project_overview(self, project_id: str) -> ProjectOverview:
         raw = await self._transport.request(
             "GET",
             f"/api/v1/projects/{encode_seg(project_id)}/overview",
@@ -199,7 +195,6 @@ class ProjectsClient:
 
     async def update_project(
         self,
-        scope: ProjectScope,
         project_id: str,
         *,
         name: str | None = None,
@@ -209,7 +204,6 @@ class ProjectsClient:
         target_date: str | None = None,
         is_archived: bool | None = None,
     ) -> ProjectSummary:
-        del scope
         body: dict[str, Any] = {}
         if name is not None:
             body["name"] = name.strip()
@@ -233,14 +227,12 @@ class ProjectsClient:
 
     async def list_members(
         self,
-        scope: ProjectScope,
         project_id: str,
         *,
         role: str | None = None,
         search: str = "",
         limit: int = 50,
     ) -> list[ProjectMember]:
-        del scope
         raw = await self._transport.request(
             "GET",
             f"/api/v1/projects/{encode_seg(project_id)}/members",
@@ -257,13 +249,11 @@ class ProjectsClient:
 
     async def add_member(
         self,
-        scope: ProjectScope,
         project_id: str,
         *,
         user_id: str,
         role: str = "contributor",
     ) -> ProjectMember:
-        del scope
         raw = await self._transport.request(
             "POST",
             f"/api/v1/projects/{encode_seg(project_id)}/members",
@@ -273,13 +263,11 @@ class ProjectsClient:
 
     async def update_member_role(
         self,
-        scope: ProjectScope,
         project_id: str,
         user_id: str,
         *,
         role: str,
     ) -> ProjectMember:
-        del scope
         raw = await self._transport.request(
             "PUT",
             f"/api/v1/projects/{encode_seg(project_id)}/members/{encode_seg(user_id)}",
@@ -287,20 +275,14 @@ class ProjectsClient:
         )
         return _parse_member(unwrap_nested_dict(raw, "member", {"userId": user_id, "role": role}))
 
-    async def remove_member(
-        self, scope: ProjectScope, project_id: str, user_id: str
-    ) -> dict[str, Any]:
-        del scope
+    async def remove_member(self, project_id: str, user_id: str) -> dict[str, Any]:
         raw = await self._transport.request(
             "DELETE",
             f"/api/v1/projects/{encode_seg(project_id)}/members/{encode_seg(user_id)}",
         )
         return raw if isinstance(raw, dict) else {"message": "Member removed"}
 
-    async def list_workflow_states(
-        self, scope: ProjectScope, project_id: str
-    ) -> list[WorkflowState]:
-        del scope
+    async def list_workflow_states(self, project_id: str) -> list[WorkflowState]:
         raw = await self._transport.request(
             "GET",
             f"/api/v1/projects/{encode_seg(project_id)}/states",
@@ -311,8 +293,7 @@ class ProjectsClient:
         states = [_parse_workflow_state(s) for s in entries if isinstance(s, dict) and s.get("id")]
         return sorted(states, key=lambda s: s.sequence)
 
-    async def list_labels(self, scope: ProjectScope, project_id: str) -> list[ProjectLabel]:
-        del scope
+    async def list_labels(self, project_id: str) -> list[ProjectLabel]:
         raw = await self._transport.request(
             "GET",
             f"/api/v1/projects/{encode_seg(project_id)}/labels",
@@ -325,14 +306,12 @@ class ProjectsClient:
 
     async def create_label(
         self,
-        scope: ProjectScope,
         project_id: str,
         *,
         name: str,
         color: str | None = None,
         description: str | None = None,
     ) -> ProjectLabel:
-        del scope
         body: dict[str, Any] = {"name": name.strip(), "type": "work_item"}
         if color:
             body["color"] = color.strip()
@@ -345,25 +324,17 @@ class ProjectsClient:
         )
         return _parse_label(unwrap_nested_dict(raw, "label", {"name": name}))
 
-    async def delete_label(
-        self, scope: ProjectScope, project_id: str, label_id: str
-    ) -> dict[str, Any]:
-        del scope
-        raw = await self._transport.request(
-            "DELETE",
-            f"/api/v1/projects/{encode_seg(project_id)}/labels/{encode_seg(label_id)}",
-        )
+    async def delete_label(self, project_id: str, label_id: str) -> dict[str, Any]:
+        raw = await self._transport.request("DELETE", project_label_route(project_id, label_id))
         return raw if isinstance(raw, dict) else {"message": "Label deleted"}
 
     async def list_activity(
         self,
-        scope: ProjectScope,
         *,
         project_id: str | None = None,
         entity_type: str | None = None,
         limit: int = 30,
     ) -> list[ActivityEntry]:
-        del scope
         # NOTE: Backend ActivityController uses `@Controller()` with NO `/api/v1/` prefix
         path = (
             f"/api/projects/{encode_seg(project_id)}/activity/feed"

@@ -4,24 +4,22 @@ from __future__ import annotations
 
 from typing import Any, Literal, cast
 
-from langchain_core.runnables import RunnableConfig
 from langgraph.graph.state import CompiledStateGraph
 
 from ai.agents.library.gateway.contracts import LibraryGateway
 from ai.agents.library.tools.contracts import LibraryToolRegistry, build_default_tool_registry
-from ai.agents.library.workflow.contracts import LibraryAgentConfig
 from ai.agents.library.workflow.nodes import build_library_nodes
 from ai.agents.library.workflow.state import LibraryState
-from ai.orchestrator.contracts import AgentOutput, AgentSpec
+from ai.orchestrator.contracts import AgentSpec
 from ai.orchestrator.state import RootState
-from ai.shared.contracts.run_control import RunUsage
 from ai.shared.contracts.sources import parse_attached_sources
 from ai.shared.llm.factory import ChatRunnable
 from ai.shared.workflow.events import ToolEventPublisher
-from ai.shared.workflow.graph import compile_tool_agent_graph
-from ai.shared.workflow.turn import latest_query, recent_tail
+from ai.shared.workflow.graph import build_tool_agent_spec, compile_tool_agent_graph
+from ai.shared.workflow.plan import ToolAgentConfig
 
 _VALID_SCOPES: frozenset[str] = frozenset({"auto", "personal", "project"})
+_DEFAULT_LIBRARY_AGENT_CONFIG = ToolAgentConfig(max_steps=5, timeout_seconds=60.0)
 
 
 def build_library_subgraph(
@@ -29,11 +27,11 @@ def build_library_subgraph(
     gateway: LibraryGateway,
     *,
     tool_registry: LibraryToolRegistry | None = None,
-    config: LibraryAgentConfig | None = None,
+    config: ToolAgentConfig | None = None,
     event_publisher: ToolEventPublisher | None = None,
 ) -> CompiledStateGraph:
     """Compile the `plan_and_act -> policy_gate -> execute_and_verify -> synthesize_response` StateGraph."""
-    cfg = config or LibraryAgentConfig()
+    cfg = config or _DEFAULT_LIBRARY_AGENT_CONFIG
     registry = tool_registry or build_default_tool_registry()
     nodes = build_library_nodes(
         llm=llm,
@@ -51,11 +49,11 @@ def build_library_agent_spec(
     gateway: LibraryGateway,
     *,
     tool_registry: LibraryToolRegistry | None = None,
-    config: LibraryAgentConfig | None = None,
+    config: ToolAgentConfig | None = None,
     event_publisher: ToolEventPublisher | None = None,
 ) -> AgentSpec:
     """Build the pluggable `library_agent` AgentSpec with HITL-gated write actions."""
-    cfg = config or LibraryAgentConfig()
+    cfg = config or _DEFAULT_LIBRARY_AGENT_CONFIG
     subgraph = build_library_subgraph(
         llm,
         gateway,
@@ -64,21 +62,10 @@ def build_library_agent_spec(
         event_publisher=event_publisher,
     )
 
-    async def _run_library_agent(state: RootState, run_config: RunnableConfig) -> AgentOutput:
-        configurable: dict[str, Any] = dict(run_config.get("configurable") or {})
-        context: dict[str, Any] = dict(state.get("context") or {})
-
-        query = latest_query(state)
-        if not query:
-            return AgentOutput(
-                agent="library_agent",
-                content="Yêu cầu thư viện đang trống.",
-                status="error",
-                error="empty query",
-            )
-
-        space_id = str(configurable.get("space_id") or context.get("space_id") or "").strip()
-        user_id = str(context.get("user_id") or configurable.get("user_id") or "").strip()
+    def _extra_state(
+        state: RootState, context: dict[str, Any], configurable: dict[str, Any]
+    ) -> dict[str, Any]:
+        del state
         raw_scope = (
             str(context.get("scope_type") or configurable.get("scope_type") or "auto")
             .strip()
@@ -99,46 +86,15 @@ def build_library_agent_spec(
             for src in attached
             if src.kind in ("library", "paper") and src.item_id
         ]
+        return {"scope_type": scope_type, "attached_items": attached_items}
 
-        sub_input: LibraryState = {
-            "query": query,
-            "conversation_tail": recent_tail(list(state.get("messages") or ())),
-            "space_id": space_id,
-            "user_id": user_id,
-            "scope_type": scope_type,
-            "attached_items": attached_items,
-            "step": 0,
-            "pending_calls": [],
-            "approved_calls": [],
-            "observations": [],
-            "citations": [],
-            "draft_answer": "",
-            "done": False,
-        }
-        result = await subgraph.ainvoke(sub_input, config=run_config)
-        observations = result.get("observations") or ()
-        raw_usage = result.get("usage")
-        return AgentOutput(
-            agent="library_agent",
-            content=str(result.get("final_answer") or ""),
-            status="ok",
-            citations=tuple(result.get("citations") or ()),
-            artifacts={
-                "steps": int(result.get("step", 1)),
-                "tool_calls_executed": len(observations),
-            },
-            usage=raw_usage if isinstance(raw_usage, RunUsage) else RunUsage(),
-            is_final=True,
-        )
-
-    return AgentSpec(
+    return build_tool_agent_spec(
         name="library_agent",
         description=(
             "Searches and summarizes structured papers/stats/collections/tags/notes in the user's Flux "
             "Library, checks duplicates/retractions, formats citations (APA/IEEE/BibTeX), adds papers "
             "by DOI/arXiv/URL, organizes items, and safely trashes or merges duplicates with confirmation."
         ),
-        handler=_run_library_agent,
         capabilities=(
             "library_search",
             "library_stats",
@@ -147,4 +103,7 @@ def build_library_agent_spec(
             "hitl_actions",
         ),
         timeout_seconds=cfg.timeout_seconds,
+        subgraph=subgraph,
+        empty_query_message="Yêu cầu thư viện đang trống.",
+        build_extra_state=_extra_state,
     )

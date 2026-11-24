@@ -1,4 +1,4 @@
-"""Strategy-dispatch translator converting LangGraph v2 events into SSE frames."""
+"""Translator converting LangGraph v2 events into typed SSE frames."""
 
 from __future__ import annotations
 
@@ -61,7 +61,7 @@ def serialize_citations(raw_citations: Any) -> list[dict[str, Any]]:
 
 
 class SseTranslator:
-    """Stateful strategy dispatcher mapping LangGraph v2 events to gateway SSE frames."""
+    """Stateful translator mapping LangGraph v2 events to gateway SSE frames."""
 
     def __init__(self, *, specialist_names: frozenset[str]) -> None:
         self._specialists = specialist_names

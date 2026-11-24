@@ -9,7 +9,7 @@ from ai.agents.rag.ingestion.jobs import IngestionJobStatus
 from ai.orchestrator.rewind import CheckpointSummary
 from ai.shared.contracts.health import ComponentStatus
 from ai.shared.contracts.knowledge import KnowledgeHit
-from ai.shared.contracts.run_control import FeedbackRecord, RunUsage
+from ai.shared.contracts.run_control import RunUsage
 from ai.shared.llm.catalog import ModelCatalogEntry
 from ai.shared.resilience.mutations import RevertStepResult
 
@@ -123,47 +123,6 @@ class ThreadRewindResponse(BaseModel):
     revert_results: list[RevertStepResult] = Field(default_factory=list)
 
 
-class StorePutRequest(BaseModel):
-    space_id: str = Field(..., min_length=1)
-    namespace: str = Field(default="default", min_length=1)
-    key: str = Field(..., min_length=1)
-    value: dict[str, Any]
-
-
-class StoreItemResponse(BaseModel):
-    space_id: str
-    namespace: str
-    key: str
-    value: dict[str, Any]
-    created_at: str | None = None
-    updated_at: str | None = None
-    score: float | None = None
-
-
-class StoreSearchRequest(BaseModel):
-    space_id: str = Field(..., min_length=1)
-    namespace: str = Field(default="default", min_length=1)
-    query: str | None = None
-    filter: dict[str, Any] | None = None
-    limit: int = Field(default=10, ge=1, le=100)
-
-
-class StoreSearchResponse(BaseModel):
-    items: list[StoreItemResponse] = Field(default_factory=list)
-
-
-class StoreDeleteResponse(BaseModel):
-    space_id: str
-    namespace: str
-    key: str
-    deleted: bool = True
-
-
-class SpaceStoreDeleteResponse(BaseModel):
-    space_id: str
-    deleted_items: int
-
-
 class KnowledgeChunkRequest(BaseModel):
     chunk_index: int = Field(default=0, ge=0)
     content: str = Field(..., min_length=1)
@@ -250,14 +209,3 @@ class AgentListResponse(BaseModel):
 
 class ModelListResponse(BaseModel):
     models: list[ModelCatalogEntry] = Field(default_factory=list)
-
-
-class FeedbackCreateRequest(BaseModel):
-    space_id: str = Field(..., min_length=1)
-    score: float = Field(..., ge=-1.0, le=1.0)
-    comment: str = ""
-    category: str = ""
-
-
-class FeedbackListResponse(BaseModel):
-    items: list[FeedbackRecord] = Field(default_factory=list)

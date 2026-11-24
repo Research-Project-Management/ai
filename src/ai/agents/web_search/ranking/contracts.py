@@ -57,4 +57,3 @@ class CuratedEvidenceBatch(BaseModel):
     repacked: tuple[RankedWebEvidence, ...] = ()
     ranked_desc: tuple[RankedWebEvidence, ...] = ()
     blocked_sources: tuple[BlockedSourceReport, ...] = ()
-    total_raw_hits: int = 0

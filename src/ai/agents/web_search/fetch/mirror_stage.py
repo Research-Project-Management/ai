@@ -1,6 +1,5 @@
 """Fetch stage resolving open-access copies from arXiv, Europe PMC, OpenAlex, and Crossref."""
 
-import re
 import xml.etree.ElementTree as ET
 from typing import Any
 
@@ -11,10 +10,13 @@ from ai.agents.web_search.fetch.contracts import (
     FetchRequest,
     FetchResult,
 )
-from ai.agents.web_search.search.scholar import reconstruct_openalex_abstract
-
-_HTML_TAG_RE = re.compile(r"<[^>]+>")
-_ATOM_NS = {"atom": "http://www.w3.org/2005/Atom", "arxiv": "http://arxiv.org/schemas/atom"}
+from ai.agents.web_search.search.scholar_parsers import (
+    ATOM_NS,
+    extract_crossref_work,
+    extract_openalex_work,
+    parse_arxiv_entry,
+    strip_html_tags,
+)
 
 
 class OpenAcademicMirrorStage:
@@ -92,33 +94,27 @@ class OpenAcademicMirrorStage:
         except (httpx.HTTPError, ET.ParseError, ValueError):
             return None
 
-        entry = root.find("atom:entry", _ATOM_NS)
+        entry = root.find("atom:entry", ATOM_NS)
         if entry is None:
             return None
-        title = " ".join(entry.findtext("atom:title", default="", namespaces=_ATOM_NS).split())
-        summary = " ".join(entry.findtext("atom:summary", default="", namespaces=_ATOM_NS).split())
-        if not title or not summary:
+        work = parse_arxiv_entry(entry, fallback_arxiv_id=ids.arxiv_id)
+        if work is None or not work.abstract:
             return None
 
-        authors = tuple(
-            name
-            for a in entry.findall("atom:author", _ATOM_NS)[:10]
-            if (name := " ".join(a.findtext("atom:name", default="", namespaces=_ATOM_NS).split()))
-        )
-        pub_raw = entry.findtext("atom:published", default="", namespaces=_ATOM_NS).strip()
-        year = int(pub_raw[:4]) if len(pub_raw) >= 4 and pub_raw[:4].isdigit() else None
         arxiv_url = f"https://arxiv.org/abs/{ids.arxiv_id}"
-        pdf_url = f"https://arxiv.org/pdf/{ids.arxiv_id}"
-        markdown = f"# {title}\n\nAuthors: {', '.join(authors)}\n\n## Abstract\n{summary}"
+        pdf_url = work.open_access_pdf_url or f"https://arxiv.org/pdf/{ids.arxiv_id}"
+        markdown = (
+            f"# {work.title}\n\nAuthors: {', '.join(work.authors)}\n\n## Abstract\n{work.abstract}"
+        )
         return FetchResult(
             url=original_url,
             final_url=arxiv_url,
-            title=title,
+            title=work.title,
             markdown=markdown,
             stage_resolved=self.name,
             identifiers=ids,
-            authors=authors,
-            published_year=year,
+            authors=work.authors,
+            published_year=work.published_year,
             open_access_pdf_url=pdf_url,
         )
 
@@ -148,9 +144,7 @@ class OpenAcademicMirrorStage:
             return None
         rec = records[0]
         title = str(rec.get("title") or "").strip()
-        abstract = " ".join(
-            _HTML_TAG_RE.sub(" ", str(rec.get("abstractText") or "")).split()
-        ).strip()
+        abstract = strip_html_tags(str(rec.get("abstractText") or ""))
         if not title or not abstract:
             return None
 
@@ -192,39 +186,21 @@ class OpenAcademicMirrorStage:
 
         if not isinstance(rec, dict):
             return None
-        title = str(rec.get("title") or "").strip()
-        abstract = reconstruct_openalex_abstract(rec.get("abstract_inverted_index"))
-        if not title or not abstract:
+        work = extract_openalex_work(rec)
+        if work is None or not work.abstract:
             return None
 
-        authors: list[str] = []
-        raw_authorships = rec.get("authorships")
-        if isinstance(raw_authorships, list):
-            for entry in raw_authorships[:10]:
-                if not isinstance(entry, dict):
-                    continue
-                author_obj = entry.get("author")
-                if isinstance(author_obj, dict):
-                    disp = str(author_obj.get("display_name") or "").strip()
-                    if disp:
-                        authors.append(disp)
-        raw_oa = rec.get("open_access")
-        oa_pdf = (
-            str(raw_oa.get("oa_url") or "").strip() or None if isinstance(raw_oa, dict) else None
-        )
-        pub_year = rec.get("publication_year")
-        year = int(pub_year) if isinstance(pub_year, int) else None
-        markdown = f"# {title}\n\n## Abstract\n{abstract}"
+        markdown = f"# {work.title}\n\n## Abstract\n{work.abstract}"
         return FetchResult(
             url=original_url,
             final_url=f"https://doi.org/{ids.doi}",
-            title=title,
+            title=work.title,
             markdown=markdown,
             stage_resolved=self.name,
             identifiers=ids,
-            authors=tuple(authors),
-            published_year=year,
-            open_access_pdf_url=oa_pdf,
+            authors=work.authors,
+            published_year=work.published_year,
+            open_access_pdf_url=work.open_access_pdf_url,
         )
 
     async def _resolve_crossref_doi(
@@ -243,18 +219,18 @@ class OpenAcademicMirrorStage:
         msg = payload.get("message") if isinstance(payload, dict) else None
         if not isinstance(msg, dict):
             return None
-        titles = msg.get("title")
-        title = str(titles[0]).strip() if isinstance(titles, list) and titles else ""
-        abstract = " ".join(_HTML_TAG_RE.sub(" ", str(msg.get("abstract") or "")).split()).strip()
-        if not title or not abstract:
+        work = extract_crossref_work(msg)
+        if work is None or not work.abstract:
             return None
 
-        markdown = f"# {title}\n\n## Abstract\n{abstract}"
+        markdown = f"# {work.title}\n\n## Abstract\n{work.abstract}"
         return FetchResult(
             url=original_url,
-            final_url=str(msg.get("URL") or f"https://doi.org/{ids.doi}"),
-            title=title,
+            final_url=work.url or f"https://doi.org/{ids.doi}",
+            title=work.title,
             markdown=markdown,
             stage_resolved=self.name,
             identifiers=ids,
+            authors=work.authors,
+            published_year=work.published_year,
         )

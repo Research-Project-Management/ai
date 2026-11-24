@@ -16,7 +16,9 @@ from ai.api.dependencies import (
     enforce_space_rate_limit,
     enforce_space_token_budget,
     get_cancel_registry,
+    get_container,
     get_input_guards,
+    get_mutation_journal,
     get_rate_limiter,
     get_token_budget,
     rate_limit_headers,
@@ -24,6 +26,7 @@ from ai.api.dependencies import (
 )
 from ai.api.schemas import ChatMessageInput, ChatRequest, ChatResponse, ResumeRequest
 from ai.api.sse import serialize_artifacts, serialize_citations, stream_graph_events
+from ai.bootstrap import AppContainer
 from ai.orchestrator.contracts import InputGuard, InputGuardViolation
 from ai.shared.contracts.context import SpaceContext
 from ai.shared.contracts.rate_limit import RateLimiter, RateLimitResult
@@ -60,10 +63,10 @@ def _is_stateless_request(payload: ChatRequest) -> bool:
     return payload.stateless or not bool((payload.chat_id or "").strip())
 
 
-def _select_graph(raw_request: Request, *, stateless: bool) -> CompiledStateGraph:
+def _select_graph(container: AppContainer, *, stateless: bool) -> CompiledStateGraph:
     if stateless:
-        return raw_request.app.state.stateless_root_graph
-    return raw_request.app.state.root_graph
+        return container.stateless_root_graph
+    return container.root_graph
 
 
 async def _validate_messages(
@@ -104,6 +107,7 @@ def _build_chat_graph_input(
 async def _prepare_request(
     payload: ChatRequest | ResumeRequest,
     raw_request: Request,
+    container: AppContainer,
     limiter: RateLimiter,
     token_budget: TokenBudget,
     cancel_registry: RunCancellationRegistry,
@@ -117,7 +121,7 @@ async def _prepare_request(
     if byok_override is None:
         await enforce_space_token_budget(space.space_id, token_budget)
     llm_override = byok_override or (
-        resolve_catalog_override(payload.context, raw_request.app.state.settings.llm)
+        resolve_catalog_override(payload.context, container.settings.llm)
         if isinstance(payload, ChatRequest)
         else None
     )
@@ -198,35 +202,25 @@ async def _build_sync_response(
     )
 
 
-@router.post("/chat")
-async def chat_stream(
-    payload: ChatRequest,
-    raw_request: Request,
-    limiter: Annotated[RateLimiter, Depends(get_rate_limiter)],
-    token_budget: Annotated[TokenBudget, Depends(get_token_budget)],
-    cancel_registry: Annotated[RunCancellationRegistry, Depends(get_cancel_registry)],
-    input_guards: Annotated[tuple[InputGuard, ...], Depends(get_input_guards)],
-    x_trace_id: Annotated[str | None, Header(alias="X-Trace-Id")] = None,
+def _stream_graph_response(
+    *,
+    container: AppContainer,
+    graph: CompiledStateGraph,
+    graph_input: Any,
+    space: SpaceContext,
+    limit_result: RateLimitResult,
+    run_config: RunnableConfig,
+    cancel_registry: RunCancellationRegistry,
+    token_budget: TokenBudget,
+    llm_override: LLMOverride | None,
+    mutation_journal: JournalStore,
 ) -> StreamingResponse:
-    space, limit_result, run_config, llm_override = await _prepare_request(
-        payload, raw_request, limiter, token_budget, cancel_registry, x_trace_id
-    )
-    lc_messages = await _validate_messages(
-        _to_langchain_messages(payload.messages),
-        input_guards,
-        run_config,
-    )
-    is_stateless = _is_stateless_request(payload)
-    graph = _select_graph(raw_request, stateless=is_stateless)
-    registry = raw_request.app.state.agent_registry
-    headers = _sse_headers(limit_result)
-
     return StreamingResponse(
         stream_graph_events(
             graph=graph,
-            graph_input=_build_chat_graph_input(payload, space, lc_messages),
+            graph_input=graph_input,
             run_config=run_config,
-            specialist_names=registry.names,
+            specialist_names=container.agent_registry.names,
             trace_id=space.trace_id,
             chat_id=space.chat_id,
             cancel_registry=cancel_registry,
@@ -234,11 +228,84 @@ async def chat_stream(
             llm_override=llm_override,
             space_id=space.space_id,
             delegation_token=space.delegation_token.get_secret_value(),
-            tool_metrics=raw_request.app.state.tool_metrics,
-            mutation_journal=getattr(raw_request.app.state, "mutation_journal", None),
+            tool_metrics=container.tool_metrics,
+            mutation_journal=mutation_journal,
         ),
         media_type="text/event-stream",
-        headers=headers,
+        headers=_sse_headers(limit_result),
+    )
+
+
+async def _invoke_graph_sync(
+    *,
+    container: AppContainer,
+    response: Response,
+    graph: CompiledStateGraph,
+    graph_input: Any,
+    space: SpaceContext,
+    limit_result: RateLimitResult,
+    run_config: RunnableConfig,
+    token_budget: TokenBudget,
+    llm_override: LLMOverride | None,
+    mutation_journal: JournalStore,
+    started: float,
+    stateless: bool,
+) -> ChatResponse:
+    _apply_headers(response, rate_limit_headers(limit_result))
+    with bind_run_context(
+        delegation_token=space.delegation_token.get_secret_value(),
+        llm_override=llm_override,
+        tool_metrics=container.tool_metrics,
+        mutation_journal=mutation_journal,
+        space_id=space.space_id,
+        trace_id=space.trace_id,
+    ):
+        result = await graph.ainvoke(graph_input, config=run_config)
+    return await _build_sync_response(
+        graph=graph,
+        result=result,
+        run_config=run_config,
+        trace_id=space.trace_id,
+        started=started,
+        stateless=stateless,
+        space_id=space.space_id,
+        token_budget=_effective_token_budget(token_budget, llm_override),
+        mutation_journal=mutation_journal,
+    )
+
+
+@router.post("/chat")
+async def chat_stream(
+    payload: ChatRequest,
+    raw_request: Request,
+    container: Annotated[AppContainer, Depends(get_container)],
+    limiter: Annotated[RateLimiter, Depends(get_rate_limiter)],
+    token_budget: Annotated[TokenBudget, Depends(get_token_budget)],
+    cancel_registry: Annotated[RunCancellationRegistry, Depends(get_cancel_registry)],
+    input_guards: Annotated[tuple[InputGuard, ...], Depends(get_input_guards)],
+    mutation_journal: Annotated[JournalStore, Depends(get_mutation_journal)],
+    x_trace_id: Annotated[str | None, Header(alias="X-Trace-Id")] = None,
+) -> StreamingResponse:
+    space, limit_result, run_config, llm_override = await _prepare_request(
+        payload, raw_request, container, limiter, token_budget, cancel_registry, x_trace_id
+    )
+    lc_messages = await _validate_messages(
+        _to_langchain_messages(payload.messages),
+        input_guards,
+        run_config,
+    )
+    graph = _select_graph(container, stateless=_is_stateless_request(payload))
+    return _stream_graph_response(
+        container=container,
+        graph=graph,
+        graph_input=_build_chat_graph_input(payload, space, lc_messages),
+        space=space,
+        limit_result=limit_result,
+        run_config=run_config,
+        cancel_registry=cancel_registry,
+        token_budget=token_budget,
+        llm_override=llm_override,
+        mutation_journal=mutation_journal,
     )
 
 
@@ -247,15 +314,17 @@ async def chat_sync(
     payload: ChatRequest,
     raw_request: Request,
     response: Response,
+    container: Annotated[AppContainer, Depends(get_container)],
     limiter: Annotated[RateLimiter, Depends(get_rate_limiter)],
     token_budget: Annotated[TokenBudget, Depends(get_token_budget)],
     cancel_registry: Annotated[RunCancellationRegistry, Depends(get_cancel_registry)],
     input_guards: Annotated[tuple[InputGuard, ...], Depends(get_input_guards)],
+    mutation_journal: Annotated[JournalStore, Depends(get_mutation_journal)],
     x_trace_id: Annotated[str | None, Header(alias="X-Trace-Id")] = None,
 ) -> ChatResponse:
     started = time.perf_counter()
     space, limit_result, run_config, llm_override = await _prepare_request(
-        payload, raw_request, limiter, token_budget, cancel_registry, x_trace_id
+        payload, raw_request, container, limiter, token_budget, cancel_registry, x_trace_id
     )
     lc_messages = await _validate_messages(
         _to_langchain_messages(payload.messages),
@@ -263,31 +332,20 @@ async def chat_sync(
         run_config,
     )
     is_stateless = _is_stateless_request(payload)
-    _apply_headers(response, rate_limit_headers(limit_result))
-    graph = _select_graph(raw_request, stateless=is_stateless)
-    journal = getattr(raw_request.app.state, "mutation_journal", None)
-    with bind_run_context(
-        delegation_token=space.delegation_token.get_secret_value(),
-        llm_override=llm_override,
-        tool_metrics=raw_request.app.state.tool_metrics,
-        mutation_journal=journal,
-        space_id=space.space_id,
-        trace_id=space.trace_id,
-    ):
-        result = await graph.ainvoke(
-            _build_chat_graph_input(payload, space, lc_messages),
-            config=run_config,
-        )
-    return await _build_sync_response(
+    graph = _select_graph(container, stateless=is_stateless)
+    return await _invoke_graph_sync(
+        container=container,
+        response=response,
         graph=graph,
-        result=result,
+        graph_input=_build_chat_graph_input(payload, space, lc_messages),
+        space=space,
+        limit_result=limit_result,
         run_config=run_config,
-        trace_id=space.trace_id,
+        token_budget=token_budget,
+        llm_override=llm_override,
+        mutation_journal=mutation_journal,
         started=started,
         stateless=is_stateless,
-        space_id=space.space_id,
-        token_budget=_effective_token_budget(token_budget, llm_override),
-        mutation_journal=journal,
     )
 
 
@@ -295,36 +353,27 @@ async def chat_sync(
 async def chat_resume_stream(
     payload: ResumeRequest,
     raw_request: Request,
+    container: Annotated[AppContainer, Depends(get_container)],
     limiter: Annotated[RateLimiter, Depends(get_rate_limiter)],
     token_budget: Annotated[TokenBudget, Depends(get_token_budget)],
     cancel_registry: Annotated[RunCancellationRegistry, Depends(get_cancel_registry)],
+    mutation_journal: Annotated[JournalStore, Depends(get_mutation_journal)],
     x_trace_id: Annotated[str | None, Header(alias="X-Trace-Id")] = None,
 ) -> StreamingResponse:
     space, limit_result, run_config, llm_override = await _prepare_request(
-        payload, raw_request, limiter, token_budget, cancel_registry, x_trace_id
+        payload, raw_request, container, limiter, token_budget, cancel_registry, x_trace_id
     )
-    graph: CompiledStateGraph = raw_request.app.state.root_graph
-    registry = raw_request.app.state.agent_registry
-    headers = _sse_headers(limit_result)
-
-    return StreamingResponse(
-        stream_graph_events(
-            graph=graph,
-            graph_input=Command(resume=payload.decision),
-            run_config=run_config,
-            specialist_names=registry.names,
-            trace_id=space.trace_id,
-            chat_id=space.chat_id,
-            cancel_registry=cancel_registry,
-            token_budget=_effective_token_budget(token_budget, llm_override),
-            llm_override=llm_override,
-            space_id=space.space_id,
-            delegation_token=space.delegation_token.get_secret_value(),
-            tool_metrics=raw_request.app.state.tool_metrics,
-            mutation_journal=getattr(raw_request.app.state, "mutation_journal", None),
-        ),
-        media_type="text/event-stream",
-        headers=headers,
+    return _stream_graph_response(
+        container=container,
+        graph=container.root_graph,
+        graph_input=Command(resume=payload.decision),
+        space=space,
+        limit_result=limit_result,
+        run_config=run_config,
+        cancel_registry=cancel_registry,
+        token_budget=token_budget,
+        llm_override=llm_override,
+        mutation_journal=mutation_journal,
     )
 
 
@@ -333,35 +382,28 @@ async def chat_resume_sync(
     payload: ResumeRequest,
     raw_request: Request,
     response: Response,
+    container: Annotated[AppContainer, Depends(get_container)],
     limiter: Annotated[RateLimiter, Depends(get_rate_limiter)],
     token_budget: Annotated[TokenBudget, Depends(get_token_budget)],
     cancel_registry: Annotated[RunCancellationRegistry, Depends(get_cancel_registry)],
+    mutation_journal: Annotated[JournalStore, Depends(get_mutation_journal)],
     x_trace_id: Annotated[str | None, Header(alias="X-Trace-Id")] = None,
 ) -> ChatResponse:
     started = time.perf_counter()
     space, limit_result, run_config, llm_override = await _prepare_request(
-        payload, raw_request, limiter, token_budget, cancel_registry, x_trace_id
+        payload, raw_request, container, limiter, token_budget, cancel_registry, x_trace_id
     )
-    _apply_headers(response, rate_limit_headers(limit_result))
-    graph: CompiledStateGraph = raw_request.app.state.root_graph
-    journal = getattr(raw_request.app.state, "mutation_journal", None)
-    with bind_run_context(
-        delegation_token=space.delegation_token.get_secret_value(),
-        llm_override=llm_override,
-        tool_metrics=raw_request.app.state.tool_metrics,
-        mutation_journal=journal,
-        space_id=space.space_id,
-        trace_id=space.trace_id,
-    ):
-        result = await graph.ainvoke(Command(resume=payload.decision), config=run_config)
-    return await _build_sync_response(
-        graph=graph,
-        result=result,
+    return await _invoke_graph_sync(
+        container=container,
+        response=response,
+        graph=container.root_graph,
+        graph_input=Command(resume=payload.decision),
+        space=space,
+        limit_result=limit_result,
         run_config=run_config,
-        trace_id=space.trace_id,
+        token_budget=token_budget,
+        llm_override=llm_override,
+        mutation_journal=mutation_journal,
         started=started,
         stateless=False,
-        space_id=space.space_id,
-        token_budget=_effective_token_budget(token_budget, llm_override),
-        mutation_journal=journal,
     )

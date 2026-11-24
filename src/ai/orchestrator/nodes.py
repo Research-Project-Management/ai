@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Sequence
-from typing import Any, Protocol, runtime_checkable
+from typing import Any
 
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, BaseMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.store.base import BaseStore
 from langgraph.types import Send
@@ -21,34 +21,15 @@ from ai.orchestrator.contracts import (
     RoutePlanner,
     RoutingDecision,
 )
+from ai.orchestrator.planner import latest_user_query
 from ai.orchestrator.policies import DEFAULT_POLICIES, PolicyChain, PolicyContext
 from ai.orchestrator.prompts import build_direct_system_prompt, build_synthesizer_prompt
 from ai.orchestrator.state import RESET_AGENT_OUTPUTS, RESET_RUN_USAGE, RootState
 from ai.shared.contracts.run_control import RunUsage
 from ai.shared.llm.factory import ChatRunnable
-from ai.shared.llm.nostream import with_nostream
-from ai.shared.llm.output import extract_text
+from ai.shared.llm.output import extract_text, with_nostream
 
 logger = logging.getLogger(__name__)
-
-
-@runtime_checkable
-class _UsageAwareRoutePlanner(Protocol):
-    """Optional extension for RoutePlanners that also report router LLM token usage."""
-
-    async def plan_with_usage(
-        self,
-        state: Any,
-        registry: AgentRegistry,
-        config: RunnableConfig,
-    ) -> tuple[RoutingDecision, RunUsage]: ...
-
-
-def _latest_user_query(messages: Sequence[BaseMessage]) -> str:
-    for msg in reversed(messages):
-        if isinstance(msg, HumanMessage):
-            return extract_text(msg.content).strip()
-    return ""
 
 
 class RootGraphNodes:
@@ -109,7 +90,7 @@ class RootGraphNodes:
         """Plan round routing via intent hint or Supervisor `RoutePlanner`."""
         current_round = state.get("round_count", 0) + 1
         hint = (state.get("intent_hint") or "").strip()
-        latest_query = _latest_user_query(state.get("messages", []))
+        latest_query = latest_user_query(state.get("messages", []))
         router_usage = RunUsage()
 
         if current_round == 1 and hint == "direct":
@@ -132,18 +113,11 @@ class RootGraphNodes:
             )
         else:
             planner_state = {**state, "round_count": current_round}
-            if isinstance(self._planner, _UsageAwareRoutePlanner):
-                decision, router_usage = await self._planner.plan_with_usage(
-                    planner_state,
-                    self._registry,
-                    config,
-                )
-            else:
-                decision = await self._planner.plan(
-                    planner_state,
-                    self._registry,
-                    config,
-                )
+            decision, router_usage = await self._planner.plan(
+                planner_state,
+                self._registry,
+                config,
+            )
 
         decision = self._policies.apply(
             decision,

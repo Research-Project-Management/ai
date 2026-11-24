@@ -8,7 +8,11 @@ from typing import Any, cast
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
 
-from ai.agents.web_search.fetch.contracts import TERMINAL_SECURITY_BLOCKS, FetchRequest
+from ai.agents.web_search.fetch.contracts import (
+    TERMINAL_SECURITY_BLOCKS,
+    AcademicIdentifiers,
+    FetchRequest,
+)
 from ai.agents.web_search.fetch.extractor import extract_academic_identifiers
 from ai.agents.web_search.fetch.ladder import UrlFetchLadder
 from ai.agents.web_search.ranking.contracts import BlockedSourceReport
@@ -40,8 +44,7 @@ from ai.agents.web_search.workflow.state import WebSearchState
 from ai.orchestrator.citations import select_indexed_citations
 from ai.shared.contracts.run_control import RunUsage
 from ai.shared.llm.factory import ChatRunnable
-from ai.shared.llm.nostream import with_nostream
-from ai.shared.llm.output import extract_text, parse_json_object, strip_reasoning
+from ai.shared.llm.output import extract_text, parse_json_object, strip_reasoning, with_nostream
 
 
 def _parse_search_plan(
@@ -146,17 +149,13 @@ def _build_fetch_requests(
     for src in client_sources:
         _enqueue(src.url)
     for hit in to_fetch_hits:
-        ids_from_hit = extract_academic_identifiers(hit.url)
-        if hit.doi or hit.arxiv_id or hit.pmid:
-            ids_from_hit = ids_from_hit.merge(
-                ids_from_hit.model_copy(
-                    update={
-                        "doi": ids_from_hit.doi or hit.doi,
-                        "arxiv_id": ids_from_hit.arxiv_id or hit.arxiv_id,
-                        "pmid": ids_from_hit.pmid or hit.pmid,
-                    }
-                )
+        ids_from_hit = extract_academic_identifiers(hit.url).merge(
+            AcademicIdentifiers(
+                doi=hit.doi,
+                arxiv_id=hit.arxiv_id,
+                pmid=hit.pmid,
             )
+        )
         _enqueue(hit.url, identifiers_hint=ids_from_hit)
 
     return fetch_requests

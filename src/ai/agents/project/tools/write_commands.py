@@ -1,4 +1,4 @@
-"""Tier-1 write commands for creating/updating work items, assignments, comments & labels."""
+"""Write commands for creating and updating work items, assignments, comments, and labels."""
 
 from __future__ import annotations
 
@@ -6,18 +6,17 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-from ai.agents.project.gateway.contracts import WorkItemSummary
-from ai.agents.project.resolution.resolver import (
-    resolve_label,
-    resolve_member,
-    resolve_workflow_state,
+from ai.agents.project.gateway.contracts import ProjectGatewayError, WorkItemSummary
+from ai.agents.project.gateway.transport import (
+    project_label_route,
+    work_item_comment_route,
+    work_item_route,
 )
 from ai.agents.project.tools.contracts import (
     ProjectToolResult,
     ProjectToolRuntime,
     ProjectToolSpec,
 )
-from ai.shared.gateway.transport import encode_seg
 from ai.shared.resilience.mutations import (
     MutationRecord,
     is_turn_journal_bound,
@@ -103,7 +102,7 @@ async def _resolve_work_item_project(
 ) -> tuple[str | None, str | None]:
     if explicit_project or runtime.scope.project_id:
         return await runtime.resolve_project_id(explicit_project)
-    item = await runtime.gateway.work_items.get_work_item(runtime.scope, work_item_id)
+    item = await runtime.gateway.work_items.get_work_item(work_item_id)
     if item.project_id:
         return item.project_id, None
     return await runtime.resolve_project_id(None)
@@ -118,31 +117,22 @@ async def handle_create_work_item(
 
     column_id: str | None = None
     if args.state:
-        st_res = resolve_workflow_state(args.state, await runtime.get_states(pid))
-        if not st_res.ok or st_res.match is None:
-            return ProjectToolResult(tool="create_work_item", status="error", error=st_res.error)
-        column_id = st_res.match.id
+        column_id, st_err = await runtime.resolve_state_id(pid, args.state)
+        if st_err:
+            return ProjectToolResult(tool="create_work_item", status="error", error=st_err)
 
     assignee_id: str | None = None
     if args.assignee:
-        mem_res = resolve_member(args.assignee, await runtime.get_members(pid))
-        if not mem_res.ok or mem_res.match is None:
-            return ProjectToolResult(tool="create_work_item", status="error", error=mem_res.error)
-        assignee_id = mem_res.match.id
+        assignee_id, mem_err = await runtime.resolve_member_id(pid, args.assignee)
+        if mem_err:
+            return ProjectToolResult(tool="create_work_item", status="error", error=mem_err)
 
     label_ids: list[str] = []
     raw_label_names: list[str] = []
     if args.labels:
-        proj_labels = await runtime.get_labels(pid)
-        for raw_lb in args.labels:
-            lb_res = resolve_label(raw_lb, proj_labels)
-            if lb_res.ok and lb_res.match is not None:
-                label_ids.append(lb_res.match.id)
-            else:
-                raw_label_names.append(raw_lb)
+        label_ids, raw_label_names = await runtime.resolve_label_ids(pid, args.labels)
 
     created = await runtime.gateway.work_items.create_work_item(
-        runtime.scope,
         pid,
         title=args.title,
         description=args.description,
@@ -163,7 +153,7 @@ async def handle_create_work_item(
                 entity_id=created.id,
                 label=created.title or args.title,
                 undo_method="DELETE",
-                undo_path=f"/api/v1/work-items/{encode_seg(created.id)}",
+                undo_path=work_item_route(created.id),
             )
         )
     return ProjectToolResult(
@@ -177,8 +167,8 @@ async def _safe_get_work_item(
     runtime: ProjectToolRuntime, work_item_id: str
 ) -> WorkItemSummary | None:
     try:
-        return await runtime.gateway.work_items.get_work_item(runtime.scope, work_item_id)
-    except Exception:  # noqa: BLE001 - pre-update snapshot capture is best-effort
+        return await runtime.gateway.work_items.get_work_item(work_item_id)
+    except (ProjectGatewayError, TimeoutError, OSError):
         return None
 
 
@@ -225,30 +215,19 @@ async def handle_update_work_item(
             return ProjectToolResult(tool="update_work_item", status="error", error=err)
 
     if args.state and pid:
-        st_res = resolve_workflow_state(args.state, await runtime.get_states(pid))
-        if not st_res.ok or st_res.match is None:
-            return ProjectToolResult(tool="update_work_item", status="error", error=st_res.error)
-        column_id = st_res.match.id
+        column_id, st_err = await runtime.resolve_state_id(pid, args.state)
+        if st_err:
+            return ProjectToolResult(tool="update_work_item", status="error", error=st_err)
 
     if args.assignee and pid:
-        mem_res = resolve_member(args.assignee, await runtime.get_members(pid))
-        if not mem_res.ok or mem_res.match is None:
-            return ProjectToolResult(tool="update_work_item", status="error", error=mem_res.error)
-        assignee_id = mem_res.match.id
+        assignee_id, mem_err = await runtime.resolve_member_id(pid, args.assignee)
+        if mem_err:
+            return ProjectToolResult(tool="update_work_item", status="error", error=mem_err)
 
     if args.labels is not None and pid:
-        proj_labels = await runtime.get_labels(pid)
-        label_ids = []
-        label_names = []
-        for raw_lb in args.labels:
-            lb_res = resolve_label(raw_lb, proj_labels)
-            if lb_res.ok and lb_res.match is not None:
-                label_ids.append(lb_res.match.id)
-            else:
-                label_names.append(raw_lb)
+        label_ids, label_names = await runtime.resolve_label_ids(pid, args.labels)
 
     updated = await runtime.gateway.work_items.update_work_item(
-        runtime.scope,
         args.work_item_id,
         title=args.title,
         description=args.description,
@@ -270,7 +249,7 @@ async def handle_update_work_item(
                 entity_type="work_item",
                 entity_id=updated.id,
                 label=updated.title or args.title or args.work_item_id,
-                path=f"/api/v1/work-items/{encode_seg(updated.id)}",
+                path=work_item_route(updated.id),
                 before_state=before_state,
                 method="PUT",
             )
@@ -290,13 +269,11 @@ async def handle_assign_work_item(
 
     assignee_id: str | None = None
     if args.assignee and args.assignee.strip():
-        mem_res = resolve_member(args.assignee, await runtime.get_members(pid))
-        if not mem_res.ok or mem_res.match is None:
-            return ProjectToolResult(tool="assign_work_item", status="error", error=mem_res.error)
-        assignee_id = mem_res.match.id
+        assignee_id, mem_err = await runtime.resolve_member_id(pid, args.assignee)
+        if mem_err:
+            return ProjectToolResult(tool="assign_work_item", status="error", error=mem_err)
 
     res = await runtime.gateway.work_items.assign_work_item(
-        runtime.scope,
         pid,
         args.work_item_id,
         assignee_id=assignee_id,
@@ -314,7 +291,6 @@ async def handle_add_comment(
             return ProjectToolResult(tool="add_work_item_comment", status="error", error=err)
 
     comment = await runtime.gateway.work_items.add_comment(
-        runtime.scope,
         args.work_item_id,
         content=args.content,
         project_id=pid,
@@ -327,7 +303,7 @@ async def handle_add_comment(
                 entity_id=comment.id,
                 label=args.content[:40],
                 undo_method="DELETE",
-                undo_path=f"/api/v1/work-items/comments/{encode_seg(comment.id)}",
+                undo_path=work_item_comment_route(comment.id),
             )
         )
     return ProjectToolResult(
@@ -345,7 +321,6 @@ async def handle_create_label(
         return ProjectToolResult(tool="create_label", status="error", error=err)
 
     label = await runtime.gateway.projects.create_label(
-        runtime.scope,
         pid,
         name=args.name,
         color=args.color,
@@ -359,7 +334,7 @@ async def handle_create_label(
                 entity_id=label.id,
                 label=label.name or args.name,
                 undo_method="DELETE",
-                undo_path=f"/api/v1/projects/{encode_seg(pid)}/labels/{encode_seg(label.id)}",
+                undo_path=project_label_route(pid, label.id),
             )
         )
     cached = runtime.labels_by_project.get(pid)
@@ -394,7 +369,7 @@ def _confirm_create_label(args: dict[str, Any]) -> str:
 
 
 def build_write_tools() -> tuple[ProjectToolSpec, ...]:
-    """Build Tier-1 reversible write commands."""
+    """Build reversible write commands."""
     return (
         ProjectToolSpec(
             name="create_work_item",

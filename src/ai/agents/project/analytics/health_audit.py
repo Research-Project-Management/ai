@@ -1,14 +1,29 @@
-"""Composable Rule Pipeline auditing project delivery health (0 LLM, 0 I/O)."""
+"""Rule pipeline auditing project delivery health."""
 
 from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Literal, Protocol
+from typing import Final, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict
 
 from ai.agents.project.gateway.contracts import ProjectAnalytics, WorkItemSummary
+
+_OVERDUE_HIGH_SEVERITY_THRESHOLD: Final[int] = 3
+_MAX_SUMMARY_TITLES: Final[int] = 5
+_MAX_TITLE_PREVIEW_CHARS: Final[int] = 35
+_MAX_AFFECTED_IDS: Final[int] = 10
+_IMBALANCE_MIN_ASSIGNEES: Final[int] = 2
+_IMBALANCE_MIN_ITEMS: Final[int] = 5
+_IMBALANCE_MIN_SHARE: Final[float] = 0.6
+_DEFAULT_MAX_WIP_RATIO: Final[float] = 0.5
+_DEFAULT_MIN_WIP_ITEMS: Final[int] = 8
+_SEVERITY_PENALTIES: Final[dict[str, int]] = {"high": 25, "medium": 12, "low": 5}
+_DEFAULT_SEVERITY_PENALTY: Final[int] = 5
+_MAX_HEALTH_SCORE: Final[int] = 100
+_HEALTHY_SCORE_THRESHOLD: Final[int] = 80
+_AT_RISK_SCORE_THRESHOLD: Final[int] = 50
 
 
 class HealthFinding(BaseModel):
@@ -46,7 +61,7 @@ class HealthAuditContext:
 
 
 class ProjectHealthRule(Protocol):
-    """OCP rule contract returning 0 or more `HealthFinding` objects."""
+    """Rule contract returning 0 or more `HealthFinding` objects."""
 
     def evaluate(self, ctx: HealthAuditContext) -> tuple[HealthFinding, ...]: ...
 
@@ -58,14 +73,19 @@ class OverdueWorkItemsRule:
         overdue = [w for w in ctx.items if w.is_overdue and not w.completed]
         if not overdue:
             return ()
-        sev: Literal["high", "medium", "low"] = "high" if len(overdue) >= 3 else "medium"
-        titles = ", ".join(w.identifier or w.title[:35] for w in overdue[:5])
+        sev: Literal["high", "medium", "low"] = (
+            "high" if len(overdue) >= _OVERDUE_HIGH_SEVERITY_THRESHOLD else "medium"
+        )
+        titles = ", ".join(
+            w.identifier or w.title[:_MAX_TITLE_PREVIEW_CHARS]
+            for w in overdue[:_MAX_SUMMARY_TITLES]
+        )
         return (
             HealthFinding(
                 severity=sev,
                 category="overdue",
                 summary=f"{len(overdue)} work item(s) overdue ({titles}).",
-                affected_ids=tuple(w.id for w in overdue[:10]),
+                affected_ids=tuple(w.id for w in overdue[:_MAX_AFFECTED_IDS]),
             ),
         )
 
@@ -84,13 +104,16 @@ class UnassignedPriorityRule:
         ]
         if not urgent_unassigned:
             return ()
-        titles = ", ".join(w.identifier or w.title[:35] for w in urgent_unassigned[:5])
+        titles = ", ".join(
+            w.identifier or w.title[:_MAX_TITLE_PREVIEW_CHARS]
+            for w in urgent_unassigned[:_MAX_SUMMARY_TITLES]
+        )
         return (
             HealthFinding(
                 severity="high",
                 category="unassigned_priority",
                 summary=f"{len(urgent_unassigned)} urgent/high item(s) have no assignee ({titles}).",
-                affected_ids=tuple(w.id for w in urgent_unassigned[:10]),
+                affected_ids=tuple(w.id for w in urgent_unassigned[:_MAX_AFFECTED_IDS]),
             ),
         )
 
@@ -105,12 +128,12 @@ class WorkloadImbalanceRule:
                 continue
             if item.assignee_name:
                 active_counts[item.assignee_name] = active_counts.get(item.assignee_name, 0) + 1
-        if len(active_counts) < 2:
+        if len(active_counts) < _IMBALANCE_MIN_ASSIGNEES:
             return ()
         top_name, top_count = max(active_counts.items(), key=lambda kv: kv[1])
         total_assigned = sum(active_counts.values())
         share = top_count / max(1, total_assigned)
-        if top_count >= 5 and share >= 0.6:
+        if top_count >= _IMBALANCE_MIN_ITEMS and share >= _IMBALANCE_MIN_SHARE:
             return (
                 HealthFinding(
                     severity="medium",
@@ -127,7 +150,12 @@ class WorkloadImbalanceRule:
 class WipBottleneckRule:
     """Flag excessive concurrent work-in-progress items inflating cycle time."""
 
-    def __init__(self, *, max_wip_ratio: float = 0.5, min_wip_items: int = 8) -> None:
+    def __init__(
+        self,
+        *,
+        max_wip_ratio: float = _DEFAULT_MAX_WIP_RATIO,
+        min_wip_items: int = _DEFAULT_MIN_WIP_ITEMS,
+    ) -> None:
         self._max_wip_ratio = max_wip_ratio
         self._min_wip_items = min_wip_items
 
@@ -145,7 +173,7 @@ class WipBottleneckRule:
                         f"{len(started)} items actively started out of {len(open_items)} open "
                         "(high WIP concentration)."
                     ),
-                    affected_ids=tuple(w.id for w in started[:10]),
+                    affected_ids=tuple(w.id for w in started[:_MAX_AFFECTED_IDS]),
                 ),
             )
         return ()
@@ -176,12 +204,12 @@ def audit_project_health(
     for rule in rules:
         findings.extend(rule.evaluate(ctx))
 
-    penalty = sum(
-        25 if f.severity == "high" else (12 if f.severity == "medium" else 5) for f in findings
-    )
-    score = max(0, 100 - penalty)
+    penalty = sum(_SEVERITY_PENALTIES.get(f.severity, _DEFAULT_SEVERITY_PENALTY) for f in findings)
+    score = max(0, _MAX_HEALTH_SCORE - penalty)
     status: Literal["healthy", "at_risk", "critical"] = (
-        "healthy" if score >= 80 else ("at_risk" if score >= 50 else "critical")
+        "healthy"
+        if score >= _HEALTHY_SCORE_THRESHOLD
+        else ("at_risk" if score >= _AT_RISK_SCORE_THRESHOLD else "critical")
     )
 
     overdue_count = sum(1 for w in items if w.is_overdue and not w.completed)

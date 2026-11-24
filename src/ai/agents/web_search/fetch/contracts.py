@@ -86,7 +86,7 @@ class FetchResult(BaseModel):
 
 
 class UrlFetchStage(Protocol):
-    """Single step in the Chain-of-Responsibility URL fetch escalation ladder."""
+    """Single stage in the ordered URL fetch escalation ladder."""
 
     @property
     def name(self) -> str: ...

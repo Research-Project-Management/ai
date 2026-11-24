@@ -1,4 +1,4 @@
-"""Chain-of-Responsibility URL Fetch Escalation Ladder (Client IP -> Open Mirror -> Safe HTTP)."""
+"""Ordered URL fetch escalation ladder (Client IP -> Open Mirror -> Safe HTTP)."""
 
 import asyncio
 import hashlib

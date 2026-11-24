@@ -1,9 +1,10 @@
-"""Reranker adapters with Chain-of-Responsibility remote-to-local fallback."""
+"""Reranker adapters with remote-to-local fallback."""
 
 import itertools
 import logging
 import re
 from collections.abc import Sequence
+from typing import Final
 
 import httpx
 
@@ -77,6 +78,15 @@ _REF_SECTION_RE = re.compile(
 )
 _REF_ENTRY_RE = re.compile(r"(?:^|\n)\s*\[\d+\]\s+[A-Z]")
 
+_RANK_PRIOR_DECAY: Final[float] = 0.20
+_PRIOR_WEIGHT_WITH_MATCH: Final[float] = 0.22
+_PRIOR_WEIGHT_NO_MATCH: Final[float] = 0.03
+_TOKEN_RECALL_WEIGHT: Final[float] = 0.48
+_BIGRAM_SCORE_WEIGHT: Final[float] = 0.14
+_SECTION_OVERLAP_WEIGHT: Final[float] = 0.12
+_TITLE_OVERLAP_WEIGHT: Final[float] = 0.04
+_BIBLIOGRAPHY_PENALTY_FACTOR: Final[float] = 0.45
+
 
 def _tokenize(text: str) -> list[str]:
     return _TOKEN_RE.findall(text.lower())
@@ -112,7 +122,7 @@ class LexicalHybridReranker:
 
         scored: list[RankedPassage] = []
         for idx, hit in enumerate(candidates):
-            rank_prior = 1.0 / (1.0 + idx * 0.20)
+            rank_prior = 1.0 / (1.0 + idx * _RANK_PRIOR_DECAY)
             body_tokens = _tokenize(hit.content)
             body_set = set(body_tokens)
             section_set = _content_tokens(_tokenize(str(hit.metadata.get("section", ""))))
@@ -139,16 +149,20 @@ class LexicalHybridReranker:
                 or section_overlap > 0.0
                 or title_overlap > 0.0
             )
-            prior_weight = 0.22 if (has_lexical_match or not q_set) else 0.03
+            prior_weight = (
+                _PRIOR_WEIGHT_WITH_MATCH
+                if (has_lexical_match or not q_set)
+                else _PRIOR_WEIGHT_NO_MATCH
+            )
             combined = (
                 prior_weight * rank_prior
-                + 0.48 * token_recall
-                + 0.14 * bigram_score
-                + 0.12 * section_overlap
-                + 0.04 * title_overlap
+                + _TOKEN_RECALL_WEIGHT * token_recall
+                + _BIGRAM_SCORE_WEIGHT * bigram_score
+                + _SECTION_OVERLAP_WEIGHT * section_overlap
+                + _TITLE_OVERLAP_WEIGHT * title_overlap
             )
             if not wants_refs and _is_bibliography_chunk(hit):
-                combined *= 0.45
+                combined *= _BIBLIOGRAPHY_PENALTY_FACTOR
             scored.append(
                 RankedPassage(
                     source_id=hit.source_id,

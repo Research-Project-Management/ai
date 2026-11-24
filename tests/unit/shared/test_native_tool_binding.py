@@ -12,7 +12,7 @@ from langchain_core.runnables import Runnable, RunnableConfig
 from ai.shared.config.llm import LLMConfig
 from ai.shared.llm.factory import ContextAwareChatRunnable
 from ai.shared.resilience.observability import LLMCallMetrics
-from ai.shared.workflow.plan import run_plan_step
+from ai.shared.workflow.plan import bind_planner_tools, run_plan_step
 
 
 class _FakeToolModel(Runnable[LanguageModelInput, AIMessage]):
@@ -172,3 +172,17 @@ async def test_run_plan_step_supports_prebound_llm_with_native_tools_bound() -> 
     assert step2["draft_answer"] == "Pre-bound final answer."
     # `_bound_cache` reused the single bind_tools() call across both steps.
     assert len(fake_llm.bound_tools_seen) == 1
+
+
+def test_bind_planner_tools_binds_or_falls_back() -> None:
+    tools = [{"type": "function", "function": {"name": "list_items", "parameters": {}}}]
+    fake_llm = _FakeToolModel("binder", [AIMessage(content="ok")])
+
+    bound, used_native = bind_planner_tools(fake_llm, tools)
+    assert bound is fake_llm
+    assert used_native is True
+    assert len(fake_llm.bound_tools_seen) == 1
+
+    unbound, used_none = bind_planner_tools(fake_llm, None)
+    assert unbound is fake_llm
+    assert used_none is False

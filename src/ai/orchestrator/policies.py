@@ -1,4 +1,4 @@
-"""Chain of Responsibility routing policies applied after Supervisor planning."""
+"""Ordered routing policies applied after Supervisor planning."""
 
 from __future__ import annotations
 

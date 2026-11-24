@@ -6,7 +6,7 @@ import asyncio
 import logging
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Any
 
 from langchain_core.runnables import RunnableConfig
 from langgraph.errors import GraphBubbleUp
@@ -16,40 +16,14 @@ from ai.shared.resilience.tool_runner import execute_tool_safely
 from ai.shared.workflow.batch import (
     BatchTracker,
     HasProvenance,
+    ToolResult,
     dedupe_citations,
     observation_of,
 )
 from ai.shared.workflow.events import ToolEventPublisher, summarize_tool_input
+from ai.shared.workflow.registry import ToolSpec
 
 logger = logging.getLogger(__name__)
-
-
-class RunnableSpec(Protocol):
-    """Structural view of a tool spec needed to execute it."""
-
-    @property
-    def name(self) -> str: ...
-    @property
-    def risk_tier(self) -> str: ...
-    @property
-    def idempotent(self) -> bool: ...
-    @property
-    def args_schema(self) -> type[BaseModel]: ...
-
-
-class ToolOutcome(Protocol):
-    """Structural view of a tool result (satisfied by every agent's result model)."""
-
-    @property
-    def tool(self) -> str: ...
-    @property
-    def status(self) -> str: ...
-    @property
-    def data(self) -> Any: ...
-    @property
-    def error(self) -> str | None: ...
-    @property
-    def citations(self) -> Sequence[Any]: ...
 
 
 @dataclass(frozen=True)
@@ -61,7 +35,7 @@ class BatchOutcome[C: HasProvenance]:
     is_terminal: bool
 
 
-async def run_tool_batch[R: ToolOutcome, C: HasProvenance](
+async def run_tool_batch[R: ToolResult, C: HasProvenance](
     *,
     approved: Sequence[Mapping[str, Any]],
     get_spec: Callable[[str], Any],
@@ -85,7 +59,7 @@ async def run_tool_batch[R: ToolOutcome, C: HasProvenance](
     batch = BatchTracker(expected_calls=len(approved))
 
     async def _run_one(
-        spec: RunnableSpec,
+        spec: ToolSpec,
         args_mapping: Mapping[str, Any],
     ) -> R:
         args = spec.args_schema.model_validate(args_mapping)
@@ -112,7 +86,7 @@ async def run_tool_batch[R: ToolOutcome, C: HasProvenance](
             result = failure(spec.name, f"{type(exc).__name__}: {exc}")
         return result
 
-    async def _record_one(spec: RunnableSpec, result: R) -> None:
+    async def _record_one(spec: ToolSpec, result: R) -> None:
         nonlocal cites
         batch.observe(risk_tier=spec.risk_tier, status=result.status)
         if after_result is not None:
@@ -132,7 +106,7 @@ async def run_tool_batch[R: ToolOutcome, C: HasProvenance](
             continue
 
         if spec.risk_tier == "read":
-            read_group: list[tuple[RunnableSpec, Mapping[str, Any]]] = []
+            read_group: list[tuple[ToolSpec, Mapping[str, Any]]] = []
             while idx < total:
                 next_call = approved[idx]
                 next_spec = get_spec(str(next_call.get("tool") or ""))

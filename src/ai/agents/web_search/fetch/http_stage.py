@@ -5,6 +5,7 @@ from urllib.parse import urljoin
 import httpx
 
 from ai.agents.web_search.fetch.contracts import (
+    BlockedReason,
     FetchRequest,
     FetchResult,
 )
@@ -27,6 +28,7 @@ _ALLOWED_TEXT_MIME_PREFIXES = (
     "application/xhtml+xml",
     "application/json",
 )
+_REDIRECT_STATUSES: frozenset[int] = frozenset({301, 302, 303, 307, 308})
 
 
 class SafeHttpFetchStage:
@@ -96,37 +98,44 @@ class SafeHttpFetchStage:
                 total += len(chunk)
             return resp, b"".join(chunks)
 
-    async def try_fetch(self, request: FetchRequest) -> FetchResult | None:
-        current_url = request.url.strip()
-        if self._is_domain_blocked(current_url, request):
-            return FetchResult(
-                url=request.url,
-                final_url=current_url,
-                stage_resolved=self.name,
-                is_blocked=True,
-                blocked_reason="domain_blocked",
-                identifiers=request.identifiers,
-            )
+    def _blocked(
+        self,
+        request: FetchRequest,
+        final_url: str,
+        reason: BlockedReason,
+    ) -> FetchResult:
+        return FetchResult(
+            url=request.url,
+            final_url=final_url,
+            stage_resolved=self.name,
+            is_blocked=True,
+            blocked_reason=reason,
+            identifiers=request.identifiers,
+        )
 
+    async def _validate_url(
+        self,
+        url: str,
+        request: FetchRequest,
+    ) -> tuple[str | None, FetchResult | None]:
+        if self._is_domain_blocked(url, request):
+            return None, self._blocked(request, url, "domain_blocked")
         try:
-            current_url = await validate_safe_public_url(
-                current_url, dns_resolver=self._dns_resolver
-            )
+            validated = await validate_safe_public_url(url, dns_resolver=self._dns_resolver)
         except SsrfBlockedError:
-            return FetchResult(
-                url=request.url,
-                final_url=current_url,
-                stage_resolved=self.name,
-                is_blocked=True,
-                blocked_reason="ssrf_blocked",
-                identifiers=request.identifiers,
-            )
+            return None, self._blocked(request, url, "ssrf_blocked")
+        return validated, None
+
+    async def try_fetch(self, request: FetchRequest) -> FetchResult | None:
+        validated_url, blocked = await self._validate_url(request.url.strip(), request)
+        if blocked is not None or validated_url is None:
+            return blocked
 
         if self._http_client is not None:
-            return await self._execute_hops(request, current_url, client=self._http_client)
+            return await self._execute_hops(request, validated_url, client=self._http_client)
 
         async with httpx.AsyncClient(timeout=self._timeout_seconds) as client:
-            return await self._execute_hops(request, current_url, client=client)
+            return await self._execute_hops(request, validated_url, client=client)
 
     async def _execute_hops(
         self,
@@ -143,76 +152,30 @@ class SafeHttpFetchStage:
             try:
                 response, raw_bytes = await self._send_single_hop(current_url, client=client)
             except httpx.HTTPError:
-                return FetchResult(
-                    url=request.url,
-                    final_url=current_url,
-                    stage_resolved=self.name,
-                    is_blocked=True,
-                    blocked_reason="network_error",
-                    identifiers=request.identifiers,
-                )
+                return self._blocked(request, current_url, "network_error")
 
-            if response.status_code in {301, 302, 303, 307, 308}:
+            if response.status_code in _REDIRECT_STATUSES:
                 location = response.headers.get("location")
                 if not location:
                     break
                 next_url = urljoin(current_url, location)
-                if self._is_domain_blocked(next_url, request):
-                    return FetchResult(
-                        url=request.url,
-                        final_url=next_url,
-                        stage_resolved=self.name,
-                        is_blocked=True,
-                        blocked_reason="domain_blocked",
-                        identifiers=request.identifiers,
-                    )
-                try:
-                    current_url = await validate_safe_public_url(
-                        next_url, dns_resolver=self._dns_resolver
-                    )
-                except SsrfBlockedError:
-                    return FetchResult(
-                        url=request.url,
-                        final_url=next_url,
-                        stage_resolved=self.name,
-                        is_blocked=True,
-                        blocked_reason="ssrf_blocked",
-                        identifiers=request.identifiers,
-                    )
+                validated_next, blocked = await self._validate_url(next_url, request)
+                if blocked is not None or validated_next is None:
+                    return blocked or self._blocked(request, next_url, "ssrf_blocked")
+                current_url = validated_next
                 continue
             break
 
-        if response is None or response.status_code in {301, 302, 303, 307, 308}:
-            return FetchResult(
-                url=request.url,
-                final_url=current_url,
-                stage_resolved=self.name,
-                is_blocked=True,
-                blocked_reason="network_error",
-                identifiers=request.identifiers,
-            )
+        if response is None or response.status_code in _REDIRECT_STATUSES:
+            return self._blocked(request, current_url, "network_error")
 
         body_text = raw_bytes.decode("utf-8", errors="replace")
-        blocked = detect_bot_challenge(body_text, response.status_code)
-        if blocked is not None:
-            return FetchResult(
-                url=request.url,
-                final_url=current_url,
-                stage_resolved=self.name,
-                is_blocked=True,
-                blocked_reason=blocked,
-                identifiers=request.identifiers,
-            )
+        blocked_reason = detect_bot_challenge(body_text, response.status_code)
+        if blocked_reason is not None:
+            return self._blocked(request, current_url, blocked_reason)
 
         if response.status_code >= 400:
-            return FetchResult(
-                url=request.url,
-                final_url=current_url,
-                stage_resolved=self.name,
-                is_blocked=True,
-                blocked_reason="network_error",
-                identifiers=request.identifiers,
-            )
+            return self._blocked(request, current_url, "network_error")
 
         content_type = (
             response.headers.get("content-type", "text/html").split(";", 1)[0].strip().lower()
@@ -220,14 +183,7 @@ class SafeHttpFetchStage:
         if content_type and not any(
             content_type.startswith(p) for p in _ALLOWED_TEXT_MIME_PREFIXES
         ):
-            return FetchResult(
-                url=request.url,
-                final_url=current_url,
-                stage_resolved=self.name,
-                is_blocked=True,
-                blocked_reason="unsupported_content",
-                identifiers=request.identifiers,
-            )
+            return self._blocked(request, current_url, "unsupported_content")
 
         if content_type in {"text/plain", "text/markdown", "application/json"}:
             title = request.url

@@ -1,10 +1,9 @@
-"""SRP workflow node runner implementing `plan_and_act -> policy_gate -> execute_and_verify -> synthesize_response`."""
+"""Workflow node runner implementing `plan_and_act -> policy_gate -> execute_and_verify -> synthesize_response`."""
 
 from __future__ import annotations
 
-import logging
 from collections.abc import Awaitable, Callable
-from typing import Any, cast
+from typing import Any
 
 from langchain_core.runnables import RunnableConfig
 
@@ -14,9 +13,6 @@ from ai.agents.library.gateway.contracts import (
     LibraryScope,
 )
 from ai.agents.library.tools.contracts import LibraryToolRegistry, ToolResult
-from ai.agents.library.workflow.contracts import (
-    LibraryAgentConfig,
-)
 from ai.agents.library.workflow.prompts import (
     build_planner_prompt,
     build_synthesizer_prompt,
@@ -27,10 +23,8 @@ from ai.shared.llm.factory import ChatRunnable
 from ai.shared.workflow.events import LangGraphToolEvents, ToolEventPublisher
 from ai.shared.workflow.execute import run_tool_batch
 from ai.shared.workflow.gate import run_policy_gate
-from ai.shared.workflow.plan import run_plan_step
+from ai.shared.workflow.plan import ToolAgentConfig, bind_planner_tools, run_plan_step
 from ai.shared.workflow.synthesize import format_conversation_tail, run_synthesize_step
-
-logger = logging.getLogger(__name__)
 
 
 def _collect_known_titles(value: Any, out: dict[str, str]) -> None:
@@ -60,7 +54,7 @@ class LibraryWorkflowNodes:
         llm: ChatRunnable,
         gateway: LibraryGateway,
         tool_registry: LibraryToolRegistry,
-        agent_config: LibraryAgentConfig,
+        agent_config: ToolAgentConfig,
         event_publisher: ToolEventPublisher | None = None,
     ) -> None:
         self._llm = llm
@@ -69,17 +63,9 @@ class LibraryWorkflowNodes:
         self._agent_config = agent_config
         self._events: ToolEventPublisher = event_publisher or LangGraphToolEvents("library_agent")
         self._catalog_text = tool_registry.format_catalog()
-        self._openai_tools = tool_registry.to_openai_tools()
-        self._planner_llm: ChatRunnable = llm
-        self._native_tools_bound = False
-        bind_fn = getattr(llm, "bind_tools", None)
-        if self._openai_tools and callable(bind_fn):
-            try:
-                self._planner_llm = cast(ChatRunnable, bind_fn(self._openai_tools))
-                self._native_tools_bound = True
-            except (NotImplementedError, TypeError):
-                self._planner_llm = llm
-                self._native_tools_bound = False
+        self._planner_llm, self._native_tools_bound = bind_planner_tools(
+            llm, tool_registry.to_openai_tools()
+        )
 
     async def plan_and_act(self, state: LibraryState, config: RunnableConfig) -> dict[str, Any]:
         query = str(state.get("query") or "")
@@ -171,7 +157,7 @@ def build_library_nodes(
     llm: ChatRunnable,
     gateway: LibraryGateway,
     tool_registry: LibraryToolRegistry,
-    agent_config: LibraryAgentConfig,
+    agent_config: ToolAgentConfig,
     event_publisher: ToolEventPublisher | None = None,
 ) -> dict[str, Callable[..., Awaitable[dict[str, Any]]]]:
     """Build pure async LangGraph node callables backed by `LibraryWorkflowNodes`."""

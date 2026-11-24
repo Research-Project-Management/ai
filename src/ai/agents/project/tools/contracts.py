@@ -1,8 +1,8 @@
-"""Command, Runtime caches, polymorphic HITL confirmation & OCP Registry for `project_agent`."""
+"""Command, runtime cache, HITL confirmation, and tool registry contracts for `project_agent`."""
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
@@ -17,7 +17,12 @@ from ai.agents.project.gateway.contracts import (
     ProjectSummary,
     WorkflowState,
 )
-from ai.agents.project.resolution.resolver import resolve_project
+from ai.agents.project.resolution.resolver import (
+    resolve_label,
+    resolve_member,
+    resolve_project,
+    resolve_workflow_state,
+)
 from ai.orchestrator.contracts import CitationItem
 from ai.shared.workflow.registry import ToolRegistry
 
@@ -38,7 +43,7 @@ class ProjectToolRuntime:
 
     async def get_projects(self) -> list[ProjectSummary]:
         if not self.projects:
-            self.projects = await self.gateway.projects.list_projects(self.scope)
+            self.projects = await self.gateway.projects.list_projects()
         return self.projects
 
     async def resolve_project_id(
@@ -53,7 +58,7 @@ class ProjectToolRuntime:
             if res.ambiguous:
                 return None, res.error
             try:
-                fetched = await self.gateway.projects.get_project(self.scope, raw)
+                fetched = await self.gateway.projects.get_project(raw)
                 if fetched.id and all(p.id != fetched.id for p in self.projects):
                     self.projects.append(fetched)
                 return fetched.id, None
@@ -76,23 +81,49 @@ class ProjectToolRuntime:
     async def get_states(self, project_id: str) -> list[WorkflowState]:
         if project_id not in self.states_by_project:
             self.states_by_project[project_id] = await self.gateway.projects.list_workflow_states(
-                self.scope, project_id
+                project_id
             )
         return self.states_by_project[project_id]
 
     async def get_members(self, project_id: str) -> list[ProjectMember]:
         if project_id not in self.members_by_project:
             self.members_by_project[project_id] = await self.gateway.projects.list_members(
-                self.scope, project_id, limit=100
+                project_id, limit=100
             )
         return self.members_by_project[project_id]
 
     async def get_labels(self, project_id: str) -> list[ProjectLabel]:
         if project_id not in self.labels_by_project:
-            self.labels_by_project[project_id] = await self.gateway.projects.list_labels(
-                self.scope, project_id
-            )
+            self.labels_by_project[project_id] = await self.gateway.projects.list_labels(project_id)
         return self.labels_by_project[project_id]
+
+    async def resolve_state_id(self, project_id: str, state: str) -> tuple[str | None, str | None]:
+        res = resolve_workflow_state(state, await self.get_states(project_id))
+        if not res.ok or res.match is None:
+            return None, res.error
+        return res.match.id, None
+
+    async def resolve_member_id(
+        self, project_id: str, member: str
+    ) -> tuple[str | None, str | None]:
+        res = resolve_member(member, await self.get_members(project_id))
+        if not res.ok or res.match is None:
+            return None, res.error
+        return res.match.id, None
+
+    async def resolve_label_ids(
+        self, project_id: str, labels: Sequence[str]
+    ) -> tuple[list[str], list[str]]:
+        proj_labels = await self.get_labels(project_id)
+        resolved_ids: list[str] = []
+        unresolved_names: list[str] = []
+        for raw_lb in labels:
+            res = resolve_label(raw_lb, proj_labels)
+            if res.ok and res.match is not None:
+                resolved_ids.append(res.match.id)
+            else:
+                unresolved_names.append(raw_lb)
+        return resolved_ids, unresolved_names
 
     def add_widget(self, widget: dict[str, Any]) -> None:
         w_key = (widget.get("type"), widget.get("title"))
@@ -116,7 +147,7 @@ class ProjectToolResult(BaseModel):
 
 
 class ProjectToolSpec(BaseModel):
-    """Command specification pairing schema, risk tier, handler & polymorphic HITL text."""
+    """Command specification pairing schema, risk tier, handler, and confirmation formatter."""
 
     model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
 
@@ -129,14 +160,14 @@ class ProjectToolSpec(BaseModel):
     describe_confirmation: Callable[[dict[str, Any]], str] | None = None
 
     def format_confirmation(self, validated_args: dict[str, Any]) -> str:
-        """Build human-readable confirmation text owned polymorphically by each tool."""
+        """Build human-readable confirmation text for this tool."""
         if self.describe_confirmation is not None:
             return self.describe_confirmation(validated_args)
         return f"Confirm executing project action `{self.name}`"
 
 
 class ProjectToolRegistry(ToolRegistry[ProjectToolSpec]):
-    """OCP registry of project tools used for planner formatting and policy gates."""
+    """Registry of project tools used for planner formatting and policy gates."""
 
     label = "project"
 

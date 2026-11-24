@@ -34,7 +34,6 @@ from ai.agents.project.gateway.contracts import (
     ProjectLabel,
     ProjectMember,
     ProjectOverview,
-    ProjectScope,
     ProjectSummary,
     WorkflowState,
     WorkItemComment,
@@ -49,10 +48,10 @@ from ai.agents.project.resolution.resolver import (
 )
 from ai.main import create_app
 from ai.orchestrator.contracts import AgentRegistry
+from ai.shared.config.agents import ProjectConfig
 from ai.shared.config.database import DatabaseConfig, PostgresConfig, QdrantConfig, RedisConfig
 from ai.shared.config.embedding import EmbeddingConfig
 from ai.shared.config.llm import LLMConfig
-from ai.shared.config.project import ProjectConfig
 from ai.shared.config.server import AppEnvironment, ServerConfig
 from ai.shared.config.settings import Settings
 from ai.shared.contracts.auth import get_delegation_token
@@ -238,14 +237,13 @@ class InMemoryFakeProjectGateway:
 
     async def list_projects(
         self,
-        scope: ProjectScope,
         *,
         project_type: Literal["created", "shared", "all"] = "all",
         search: str = "",
         priority: str | None = None,
         is_archived: bool | None = None,
     ) -> list[ProjectSummary]:
-        self._record("list_projects", space_id=scope.space_id, project_type=project_type)
+        self._record("list_projects", project_type=project_type)
         items = list(self.project_rows)
         if search:
             q = search.lower()
@@ -256,14 +254,14 @@ class InMemoryFakeProjectGateway:
             items = [p for p in items if p.is_archived == is_archived]
         return items
 
-    async def get_project(self, scope: ProjectScope, project_id: str) -> ProjectSummary:
+    async def get_project(self, project_id: str) -> ProjectSummary:
         self._record("get_project", project_id=project_id)
         for p in self.project_rows:
             if p.id == project_id or p.identifier == project_id:
                 return p
         raise ProjectGatewayError(404, f"Project {project_id} not found")
 
-    async def get_project_overview(self, scope: ProjectScope, project_id: str) -> ProjectOverview:
+    async def get_project_overview(self, project_id: str) -> ProjectOverview:
         self._record("get_project_overview", project_id=project_id)
         items = list(self.work_item_rows.values())
         completed = sum(1 for w in items if w.completed)
@@ -284,7 +282,6 @@ class InMemoryFakeProjectGateway:
 
     async def update_project(
         self,
-        scope: ProjectScope,
         project_id: str,
         *,
         name: str | None = None,
@@ -296,7 +293,7 @@ class InMemoryFakeProjectGateway:
     ) -> ProjectSummary:
         self._record("update_project", project_id=project_id, name=name)
         del start_date, target_date
-        base = await self.get_project(scope, project_id)
+        base = await self.get_project(project_id)
         return base.model_copy(
             update={
                 **({"name": name} if name is not None else {}),
@@ -308,7 +305,6 @@ class InMemoryFakeProjectGateway:
 
     async def list_members(
         self,
-        scope: ProjectScope,
         project_id: str,
         *,
         role: str | None = None,
@@ -316,7 +312,7 @@ class InMemoryFakeProjectGateway:
         limit: int = 50,
     ) -> list[ProjectMember]:
         self._record("list_members", project_id=project_id, role=role)
-        del scope, limit
+        del limit
         items = list(self.members)
         if role:
             items = [m for m in items if m.role == role]
@@ -327,7 +323,6 @@ class InMemoryFakeProjectGateway:
 
     async def add_member(
         self,
-        scope: ProjectScope,
         project_id: str,
         *,
         user_id: str,
@@ -340,40 +335,30 @@ class InMemoryFakeProjectGateway:
 
     async def update_member_role(
         self,
-        scope: ProjectScope,
         project_id: str,
         user_id: str,
         *,
         role: str,
     ) -> ProjectMember:
         self._record("update_member_role", project_id=project_id, user_id=user_id, role=role)
-        del scope
         return ProjectMember(user_id=user_id, name="Updated Member", role=role)
 
-    async def remove_member(
-        self, scope: ProjectScope, project_id: str, user_id: str
-    ) -> dict[str, Any]:
+    async def remove_member(self, project_id: str, user_id: str) -> dict[str, Any]:
         self._record("remove_member", project_id=project_id, user_id=user_id)
-        del scope
         self.removed_members.append(user_id)
         self.members = [m for m in self.members if m.user_id != user_id]
         return {"message": "Member removed"}
 
-    async def list_workflow_states(
-        self, scope: ProjectScope, project_id: str
-    ) -> list[WorkflowState]:
+    async def list_workflow_states(self, project_id: str) -> list[WorkflowState]:
         self._record("list_workflow_states", project_id=project_id)
-        del scope
         return list(self.states)
 
-    async def list_labels(self, scope: ProjectScope, project_id: str) -> list[ProjectLabel]:
+    async def list_labels(self, project_id: str) -> list[ProjectLabel]:
         self._record("list_labels", project_id=project_id)
-        del scope
         return list(self.labels)
 
     async def create_label(
         self,
-        scope: ProjectScope,
         project_id: str,
         *,
         name: str,
@@ -381,7 +366,6 @@ class InMemoryFakeProjectGateway:
         description: str | None = None,
     ) -> ProjectLabel:
         self._record("create_label", project_id=project_id, name=name)
-        del scope
         lb = ProjectLabel(
             id=f"lbl-{len(self.labels) + 1}",
             name=name,
@@ -391,24 +375,20 @@ class InMemoryFakeProjectGateway:
         self.labels.append(lb)
         return lb
 
-    async def delete_label(
-        self, scope: ProjectScope, project_id: str, label_id: str
-    ) -> dict[str, Any]:
+    async def delete_label(self, project_id: str, label_id: str) -> dict[str, Any]:
         self._record("delete_label", project_id=project_id, label_id=label_id)
-        del scope
         self.labels = [lb for lb in self.labels if lb.id != label_id]
         return {"message": "Label deleted"}
 
     async def list_activity(
         self,
-        scope: ProjectScope,
         *,
         project_id: str | None = None,
         entity_type: str | None = None,
         limit: int = 30,
     ) -> list[ActivityEntry]:
         self._record("list_activity", project_id=project_id, entity_type=entity_type)
-        del scope, limit
+        del limit
         return [
             ActivityEntry(
                 id="act-1",
@@ -422,7 +402,6 @@ class InMemoryFakeProjectGateway:
 
     async def list_work_items(
         self,
-        scope: ProjectScope,
         project_id: str,
         *,
         column_id: str | None = None,
@@ -435,7 +414,7 @@ class InMemoryFakeProjectGateway:
         limit: int = 50,
     ) -> list[WorkItemSummary]:
         self._record("list_work_items", project_id=project_id, column_id=column_id)
-        del scope, label, limit
+        del label, limit
         items = [w for w in self.work_item_rows.values() if w.project_id == project_id]
         if column_id:
             items = [w for w in items if w.column_id == column_id]
@@ -453,20 +432,17 @@ class InMemoryFakeProjectGateway:
 
     async def get_my_work_items(
         self,
-        scope: ProjectScope,
         *,
         project_id: str | None = None,
         relation: Literal["assigned", "created", "subscribed", "all"] = "assigned",
     ) -> list[WorkItemSummary]:
         self._record("get_my_work_items", project_id=project_id, relation=relation)
-        del scope
         return [
             w for w in self.work_item_rows.values() if not project_id or w.project_id == project_id
         ]
 
-    async def get_work_item(self, scope: ProjectScope, work_item_id: str) -> WorkItemSummary:
+    async def get_work_item(self, work_item_id: str) -> WorkItemSummary:
         self._record("get_work_item", work_item_id=work_item_id)
-        del scope
         for w in self.work_item_rows.values():
             if w.id == work_item_id or w.identifier == work_item_id:
                 return w
@@ -474,7 +450,6 @@ class InMemoryFakeProjectGateway:
 
     async def create_work_item(
         self,
-        scope: ProjectScope,
         project_id: str,
         *,
         title: str,
@@ -489,7 +464,7 @@ class InMemoryFakeProjectGateway:
         parent_work_item_id: str | None = None,
     ) -> WorkItemSummary:
         self._record("create_work_item", project_id=project_id, title=title)
-        del scope, labels
+        del labels
         st = next((s for s in self.states if s.id == column_id), self.states[0])
         mem = next((m for m in self.members if m.user_id == assignee_id), None)
         item = WorkItemSummary(
@@ -515,7 +490,6 @@ class InMemoryFakeProjectGateway:
 
     async def update_work_item(
         self,
-        scope: ProjectScope,
         work_item_id: str,
         *,
         title: str | None = None,
@@ -532,7 +506,7 @@ class InMemoryFakeProjectGateway:
     ) -> WorkItemSummary:
         self._record("update_work_item", work_item_id=work_item_id, column_id=column_id)
         del labels
-        existing = await self.get_work_item(scope, work_item_id)
+        existing = await self.get_work_item(work_item_id)
         st = next((s for s in self.states if s.id == column_id), None)
         updated = existing.model_copy(
             update={
@@ -559,16 +533,15 @@ class InMemoryFakeProjectGateway:
         self.work_item_rows[existing.id] = updated
         return updated
 
-    async def delete_work_item(self, scope: ProjectScope, work_item_id: str) -> dict[str, Any]:
+    async def delete_work_item(self, work_item_id: str) -> dict[str, Any]:
         self._record("delete_work_item", work_item_id=work_item_id)
-        del scope
         self.deleted_ids.append(work_item_id)
         self.work_item_rows.pop(work_item_id, None)
         return {"message": "Work item deleted"}
 
-    async def archive_work_item(self, scope: ProjectScope, work_item_id: str) -> WorkItemSummary:
+    async def archive_work_item(self, work_item_id: str) -> WorkItemSummary:
         self._record("archive_work_item", work_item_id=work_item_id)
-        existing = await self.get_work_item(scope, work_item_id)
+        existing = await self.get_work_item(work_item_id)
         self.archived_ids.append(existing.id)
         archived = existing.model_copy(update={"is_archived": True})
         self.work_item_rows[existing.id] = archived
@@ -576,31 +549,26 @@ class InMemoryFakeProjectGateway:
 
     async def assign_work_item(
         self,
-        scope: ProjectScope,
         project_id: str,
         work_item_id: str,
         *,
         assignee_id: str | None = None,
     ) -> dict[str, Any]:
         self._record("assign_work_item", project_id=project_id, work_item_id=work_item_id)
-        del scope
         return {"newAssigneeId": assignee_id}
 
-    async def list_comments(self, scope: ProjectScope, work_item_id: str) -> list[WorkItemComment]:
+    async def list_comments(self, work_item_id: str) -> list[WorkItemComment]:
         self._record("list_comments", work_item_id=work_item_id)
-        del scope
         return list(self.comments.get(work_item_id, []))
 
     async def add_comment(
         self,
-        scope: ProjectScope,
         work_item_id: str,
         *,
         content: str,
         project_id: str | None = None,
     ) -> WorkItemComment:
         self._record("add_comment", work_item_id=work_item_id, project_id=project_id)
-        del scope
         comment = WorkItemComment(
             id="cmt-new",
             work_item_id=work_item_id,
@@ -611,9 +579,8 @@ class InMemoryFakeProjectGateway:
         self.comments.setdefault(work_item_id, []).append(comment)
         return comment
 
-    async def get_project_analytics(self, scope: ProjectScope, project_id: str) -> ProjectAnalytics:
+    async def get_project_analytics(self, project_id: str) -> ProjectAnalytics:
         self._record("get_project_analytics", project_id=project_id)
-        del scope
         return ProjectAnalytics(
             project_id=project_id,
             total_items=2,
@@ -831,18 +798,16 @@ async def test_http_project_gateway_exact_nestjs_routes_and_activity_prefix() ->
             http_client=client,
             token_provider=lambda: "proj-tok-1",
         )
-        scope = ProjectScope(space_id="sp-1", project_id="p1", user_id="u1")
-
-        states = await gw.projects.list_workflow_states(scope, "p1")
+        states = await gw.projects.list_workflow_states("p1")
         assert len(states) == 1 and states[0].id == "col-1"
 
-        act = await gw.projects.list_activity(scope, project_id="p1")
+        act = await gw.projects.list_activity(project_id="p1")
         assert len(act) == 1 and act[0].actor_name == "Alice"
 
-        moved = await gw.work_items.update_work_item(scope, "wi-9", column_id="col-1")
+        moved = await gw.work_items.update_work_item("wi-9", column_id="col-1")
         assert moved.column_id == "col-1" and moved.identifier == "FLUX-9"
 
-        kpis = await gw.analytics.get_project_analytics(scope, "p1")
+        kpis = await gw.analytics.get_project_analytics("p1")
         assert kpis.total_items == 10 and kpis.completion_rate == 0.7
 
     paths_seen = [(m, p) for m, p, _ in seen]

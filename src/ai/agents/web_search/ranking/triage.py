@@ -3,6 +3,7 @@
 import re
 from collections.abc import Sequence
 from itertools import pairwise
+from typing import Final
 from urllib.parse import urlparse
 
 from ai.agents.web_search.fetch.contracts import FetchResult
@@ -147,19 +148,17 @@ def select_urls_for_deep_fetch(
     return selected
 
 
-def curate_evidence_batch(
-    *,
-    query: str,
-    hits: Sequence[SearchHit],
-    fetch_results: Sequence[FetchResult],
-    seed_urls: Sequence[str] = (),
-    top_k: int = 6,
-    min_score: float = 0.05,
-) -> CuratedEvidenceBatch:
-    """Merge fetched pages into hits, filter noise, sanitize IPI, and Reverse-Repack."""
-    deduped = deduplicate_hits(hits)
-    seed_keys = {canonicalize_url(u) for u in seed_urls if canonicalize_url(u)}
+_DIRECT_SNIPPET_MAX_CHARS: Final[int] = 360
+_PREVIEW_SNIPPET_MAX_CHARS: Final[int] = 280
+_STANDALONE_FETCH_BASE_SCORE: Final[float] = 0.9
+_DIRECT_SEED_MIN_SCORE: Final[float] = 0.5
 
+_ScoredCandidate = tuple[SearchHit, float, bool]
+
+
+def _index_fetch_results(
+    fetch_results: Sequence[FetchResult],
+) -> tuple[dict[str, FetchResult], list[BlockedSourceReport]]:
     fetch_by_id: dict[str, FetchResult] = {}
     blocked_reports: list[BlockedSourceReport] = []
     seen_blocked_urls: set[str] = set()
@@ -185,7 +184,17 @@ def curate_evidence_batch(
                     )
                 )
 
-    candidates: list[tuple[SearchHit, float, bool]] = []
+    return fetch_by_id, blocked_reports
+
+
+def _enrich_hits(
+    *,
+    query: str,
+    deduped: Sequence[SearchHit],
+    fetch_by_id: dict[str, FetchResult],
+    seed_keys: set[str],
+) -> tuple[list[_ScoredCandidate], set[str]]:
+    candidates: list[_ScoredCandidate] = []
     represented_ids: set[str] = set()
 
     for hit in deduped:
@@ -203,7 +212,7 @@ def curate_evidence_batch(
                 category=hit.category,
                 title=fetched.title or hit.title,
                 url=fetched.final_url or hit.url,
-                snippet=hit.snippet or fetched.markdown[:360],
+                snippet=hit.snippet or fetched.markdown[:_DIRECT_SNIPPET_MAX_CHARS],
                 content=fetched.markdown,
                 doi=hit.doi or fetched.identifiers.doi,
                 arxiv_id=hit.arxiv_id or fetched.identifiers.arxiv_id,
@@ -219,7 +228,18 @@ def curate_evidence_batch(
         score = score_search_hit(query, enriched)
         candidates.append((enriched, score, is_direct_seed))
 
-    # Promote standalone fetched URLs (e.g., direct_url mode or external_sources) not present in search hits
+    return candidates, represented_ids
+
+
+def _promote_standalone_fetches(
+    *,
+    query: str,
+    fetch_results: Sequence[FetchResult],
+    represented_ids: set[str],
+    seed_keys: set[str],
+) -> list[_ScoredCandidate]:
+    """Promote standalone fetched URLs (direct_url mode or external_sources) absent from search hits."""
+    promoted: list[_ScoredCandidate] = []
     for res in fetch_results:
         if res.is_blocked or not res.markdown.strip():
             continue
@@ -241,7 +261,7 @@ def curate_evidence_batch(
             category="scholar" if is_scholar else "web",
             title=res.title or res.url,
             url=res.final_url or res.url,
-            snippet=res.markdown[:360],
+            snippet=res.markdown[:_DIRECT_SNIPPET_MAX_CHARS],
             content=res.markdown,
             doi=derived.doi,
             arxiv_id=derived.arxiv_id,
@@ -249,22 +269,21 @@ def curate_evidence_batch(
             authors=res.authors,
             published_year=res.published_year,
             open_access_pdf_url=res.open_access_pdf_url,
-            score=0.9,
+            score=_STANDALONE_FETCH_BASE_SCORE,
         )
-        score = max(
-            0.5 if url_key in seed_keys or res.stage_resolved == "client_supplied" else 0.0,
-            score_search_hit(query, synthetic),
+        min_direct_score = (
+            _DIRECT_SEED_MIN_SCORE
+            if url_key in seed_keys or res.stage_resolved == "client_supplied"
+            else 0.0
         )
-        candidates.append((synthetic, score, True))
+        score = max(min_direct_score, score_search_hit(query, synthetic))
+        promoted.append((synthetic, score, True))
+    return promoted
 
-    filtered = [
-        (hit, score)
-        for hit, score, is_direct in candidates
-        if score >= min_score or (is_direct and bool((hit.content or hit.snippet).strip()))
-    ]
-    filtered.sort(key=lambda pair: pair[1], reverse=True)
-    top_pairs = filtered[: max(0, top_k)]
 
+def _project_ranked_evidence(
+    top_pairs: Sequence[tuple[SearchHit, float]],
+) -> tuple[RankedWebEvidence, ...]:
     ranked_list: list[RankedWebEvidence] = []
     for hit, score in top_pairs:
         source_id = compute_canonical_id(url=hit.url, doi=hit.doi, arxiv_id=hit.arxiv_id)
@@ -275,7 +294,7 @@ def curate_evidence_batch(
                 source_id=source_id,
                 title=hit.title,
                 url=hit.url,
-                snippet=hit.snippet or body_raw[:280],
+                snippet=hit.snippet or body_raw[:_PREVIEW_SNIPPET_MAX_CHARS],
                 content=sanitized,
                 provider=hit.provider,
                 category=hit.category,
@@ -287,12 +306,47 @@ def curate_evidence_batch(
                 score=score,
             )
         )
+    return tuple(ranked_list)
 
-    ranked_desc = tuple(ranked_list)
-    repacked = tuple(reversed(ranked_desc))
+
+def curate_evidence_batch(
+    *,
+    query: str,
+    hits: Sequence[SearchHit],
+    fetch_results: Sequence[FetchResult],
+    seed_urls: Sequence[str] = (),
+    top_k: int = 6,
+    min_score: float = 0.05,
+) -> CuratedEvidenceBatch:
+    """Merge fetched pages into hits, filter noise, sanitize IPI, and Reverse-Repack."""
+    deduped = deduplicate_hits(hits)
+    seed_keys = {canonicalize_url(u) for u in seed_urls if canonicalize_url(u)}
+
+    fetch_by_id, blocked_reports = _index_fetch_results(fetch_results)
+    candidates, represented_ids = _enrich_hits(
+        query=query,
+        deduped=deduped,
+        fetch_by_id=fetch_by_id,
+        seed_keys=seed_keys,
+    )
+    candidates.extend(
+        _promote_standalone_fetches(
+            query=query,
+            fetch_results=fetch_results,
+            represented_ids=represented_ids,
+            seed_keys=seed_keys,
+        )
+    )
+
+    filtered = [
+        (hit, score)
+        for hit, score, is_direct in candidates
+        if score >= min_score or (is_direct and bool((hit.content or hit.snippet).strip()))
+    ]
+    filtered.sort(key=lambda pair: pair[1], reverse=True)
+    ranked_desc = _project_ranked_evidence(filtered[: max(0, top_k)])
     return CuratedEvidenceBatch(
-        repacked=repacked,
+        repacked=tuple(reversed(ranked_desc)),
         ranked_desc=ranked_desc,
         blocked_sources=tuple(blocked_reports),
-        total_raw_hits=len(hits),
     )

@@ -486,6 +486,25 @@ def _make_chat_openai(
     )
 
 
+def _build_fallback_model(
+    config: LLMConfig,
+    *,
+    default_model: str,
+    temperature: float,
+    timeout: float,
+    max_completion_tokens: int | None,
+) -> ChatOpenAI:
+    return _make_chat_openai(
+        model=config.fallback_model or default_model,
+        api_key=config.fallback_api_key,
+        base_url=config.fallback_base_url or config.base_url or None,
+        temperature=temperature,
+        timeout=timeout,
+        max_retries=config.fallback_max_retries,
+        max_completion_tokens=max_completion_tokens,
+    )
+
+
 def build_chat_model(
     config: LLMConfig,
     *,
@@ -521,13 +540,11 @@ def build_chat_model(
         if use_platform_fallback:
             return primary.with_fallbacks(
                 [
-                    _make_chat_openai(
-                        model=config.fallback_model or byok_model,
-                        api_key=config.fallback_api_key,
-                        base_url=config.fallback_base_url or config.base_url or None,
+                    _build_fallback_model(
+                        config,
+                        default_model=byok_model,
                         temperature=active_temp,
                         timeout=active_timeout,
-                        max_retries=config.fallback_max_retries,
                         max_completion_tokens=active_max_tokens,
                     )
                 ]
@@ -564,13 +581,11 @@ def build_chat_model(
 
     if config.has_fallback:
         fallbacks.append(
-            _make_chat_openai(
-                model=config.fallback_model or active_model,
-                api_key=config.fallback_api_key,
-                base_url=config.fallback_base_url or config.base_url or None,
+            _build_fallback_model(
+                config,
+                default_model=active_model,
                 temperature=active_temp,
                 timeout=active_timeout,
-                max_retries=config.fallback_max_retries,
                 max_completion_tokens=active_max_tokens,
             )
         )

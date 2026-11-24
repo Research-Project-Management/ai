@@ -1,4 +1,4 @@
-"""Tier-0 read-only Project, Work Item, Member, Label & Activity commands."""
+"""Read-only Project, Work Item, Member, Label, and Activity commands."""
 
 from __future__ import annotations
 
@@ -7,11 +7,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 from ai.agents.project.analytics.widget_builder import build_work_item_overview_widget
-from ai.agents.project.resolution.resolver import (
-    resolve_label,
-    resolve_member,
-    resolve_workflow_state,
-)
+from ai.agents.project.resolution.resolver import resolve_label
 from ai.agents.project.tools.contracts import (
     ProjectToolResult,
     ProjectToolRuntime,
@@ -92,7 +88,6 @@ async def handle_list_projects(
     runtime: ProjectToolRuntime, args: ListProjectsArgs
 ) -> ProjectToolResult:
     projects = await runtime.gateway.projects.list_projects(
-        runtime.scope,
         project_type=args.project_type,
         search=args.search,
         priority=args.priority,
@@ -121,7 +116,7 @@ async def handle_get_project_overview(
     pid, err = await runtime.resolve_project_id(args.project_id)
     if err or not pid:
         return ProjectToolResult(tool="get_project_overview", status="error", error=err)
-    overview = await runtime.gateway.projects.get_project_overview(runtime.scope, pid)
+    overview = await runtime.gateway.projects.get_project_overview(pid)
     return ProjectToolResult(
         tool="get_project_overview",
         status="ok",
@@ -138,19 +133,15 @@ async def handle_list_work_items(
 
     column_id: str | None = None
     if args.state:
-        states = await runtime.get_states(pid)
-        st_res = resolve_workflow_state(args.state, states)
-        if not st_res.ok or st_res.match is None:
-            return ProjectToolResult(tool="list_work_items", status="error", error=st_res.error)
-        column_id = st_res.match.id
+        column_id, st_err = await runtime.resolve_state_id(pid, args.state)
+        if st_err:
+            return ProjectToolResult(tool="list_work_items", status="error", error=st_err)
 
     assignee_id: str | None = None
     if args.assignee:
-        members = await runtime.get_members(pid)
-        mem_res = resolve_member(args.assignee, members)
-        if not mem_res.ok or mem_res.match is None:
-            return ProjectToolResult(tool="list_work_items", status="error", error=mem_res.error)
-        assignee_id = mem_res.match.id
+        assignee_id, mem_err = await runtime.resolve_member_id(pid, args.assignee)
+        if mem_err:
+            return ProjectToolResult(tool="list_work_items", status="error", error=mem_err)
 
     label_id: str | None = None
     if args.label:
@@ -161,7 +152,6 @@ async def handle_list_work_items(
         label_id = lb_res.match.id
 
     items = await runtime.gateway.work_items.list_work_items(
-        runtime.scope,
         pid,
         column_id=column_id,
         priority=args.priority,
@@ -193,7 +183,6 @@ async def handle_get_my_work_items(
             return ProjectToolResult(tool="get_my_work_items", status="error", error=err)
 
     items = await runtime.gateway.work_items.get_my_work_items(
-        runtime.scope,
         project_id=pid,
         relation=args.relation,
     )
@@ -212,9 +201,9 @@ async def handle_get_my_work_items(
 async def handle_get_work_item(
     runtime: ProjectToolRuntime, args: GetWorkItemArgs
 ) -> ProjectToolResult:
-    item = await runtime.gateway.work_items.get_work_item(runtime.scope, args.work_item_id)
+    item = await runtime.gateway.work_items.get_work_item(args.work_item_id)
     comments = (
-        await runtime.gateway.work_items.list_comments(runtime.scope, item.id or args.work_item_id)
+        await runtime.gateway.work_items.list_comments(item.id or args.work_item_id)
         if args.include_comments
         else []
     )
@@ -235,7 +224,6 @@ async def handle_list_members(
     if err or not pid:
         return ProjectToolResult(tool="list_members", status="error", error=err)
     members = await runtime.gateway.projects.list_members(
-        runtime.scope,
         pid,
         role=args.role,
         search=args.search,
@@ -282,7 +270,6 @@ async def handle_get_workspace_activity(
             return ProjectToolResult(tool="get_workspace_activity", status="error", error=err)
 
     entries = await runtime.gateway.projects.list_activity(
-        runtime.scope,
         project_id=pid,
         entity_type=args.entity_type,
         limit=args.limit,
@@ -299,7 +286,7 @@ async def handle_get_workspace_activity(
 
 
 def build_read_tools() -> tuple[ProjectToolSpec, ...]:
-    """Build Tier-0 read-only Project inspection commands."""
+    """Build read-only Project inspection commands."""
     return (
         ProjectToolSpec(
             name="list_projects",

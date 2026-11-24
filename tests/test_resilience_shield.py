@@ -12,6 +12,8 @@ from langchain_core.runnables import RunnableConfig, RunnableLambda, RunnableWit
 from pydantic import SecretStr
 from redis.asyncio import Redis
 
+from ai.agents.editor.github.client import HttpGitHubArtifactClient
+from ai.agents.editor.github.contracts import GitHubArtifactError
 from ai.agents.editor.workflow.prompts import build_planner_prompt as build_editor_planner_prompt
 from ai.agents.library.workflow.prompts import build_planner_prompt as build_library_planner_prompt
 from ai.agents.project.workflow.prompts import build_planner_prompt as build_project_planner_prompt
@@ -20,8 +22,6 @@ from ai.orchestrator.planner import LLMSupervisorPlanner
 from ai.orchestrator.prompts import build_supervisor_prompt
 from ai.orchestrator.state import RootState
 from ai.shared.config.llm import LLMConfig
-from ai.shared.github.client import HttpGitHubArtifactClient
-from ai.shared.github.contracts import GitHubArtifactError
 from ai.shared.llm.factory import (
     ContextAwareChatRunnable,
     LLMOverride,
@@ -525,12 +525,12 @@ async def test_supervisor_planner_deterministic_router_cache() -> None:
 
     # 1. First plan invokes router LLM
     with bind_delegation_token("test-delegation-token"):
-        d1 = await planner.plan(state, registry, cfg)
+        d1, _ = await planner.plan(state, registry, cfg)
         assert d1.mode == "delegate"
         assert d1.targets[0].agent == "library_agent"
         assert llm_calls["count"] == 1
 
         # 2. Second plan re-evaluates fresh (router cache removed to prevent stale multi-turn routing)
-        d2 = await planner.plan(state, registry, cfg)
+        d2, _ = await planner.plan(state, registry, cfg)
         assert d2 == d1
         assert llm_calls["count"] == 2

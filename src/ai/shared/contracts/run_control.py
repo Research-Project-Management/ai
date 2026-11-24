@@ -1,4 +1,4 @@
-"""Contracts for execution usage telemetry, active run cancellation, and feedback."""
+"""Contracts for execution usage telemetry and active run cancellation."""
 
 from typing import Any, Protocol, runtime_checkable
 
@@ -63,30 +63,4 @@ class RunCancellationRegistry(Protocol):
 
     async def is_cancelled(self, space_id: str, thread_id: str) -> bool:
         """Check whether cancellation has been requested for `(space_id, thread_id)`."""
-        ...
-
-
-class FeedbackRecord(BaseModel):
-    """Immutable user or automated quality evaluation attached to a trace."""
-
-    model_config = ConfigDict(frozen=True)
-
-    trace_id: str = Field(..., min_length=1)
-    space_id: str = Field(..., min_length=1)
-    score: float = Field(..., ge=-1.0, le=1.0)
-    comment: str = ""
-    category: str = ""
-    created_at: str
-
-
-@runtime_checkable
-class FeedbackSink(Protocol):
-    """Port interface for storing and querying run quality feedback."""
-
-    async def record(self, item: FeedbackRecord) -> None:
-        """Persist one feedback record."""
-        ...
-
-    async def list_by_trace(self, trace_id: str, *, space_id: str) -> list[FeedbackRecord]:
-        """Return all feedback entries matching `trace_id` inside `space_id`."""
         ...
