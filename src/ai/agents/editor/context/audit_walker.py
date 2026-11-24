@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from ai.agents.editor.context.audit_models import IncludeIssue
 from ai.agents.editor.context.latex_scanner import (
     VERBATIM_ENVS,
+    is_tex_or_sty_path,
     mask_environments,
     normalize_path,
 )
@@ -114,17 +115,11 @@ def prepare_sources(
 
     for raw_path, raw_text in files.items():
         norm_path = normalize_path(raw_path)
-        if not norm_path:
-            continue
-        lower = norm_path.lower()
-        filename = norm_path.rsplit("/", 1)[-1]
-        is_bib = lower.endswith(".bib")
-        is_tex_or_sty = lower.endswith((".tex", ".sty")) or "." not in filename
-        if is_bib or not is_tex_or_sty:
+        if not norm_path or not is_tex_or_sty_path(norm_path):
             continue
         source_lines[norm_path] = mask_environments(raw_text, skipped_envs=VERBATIM_ENVS)
         raw_contents[norm_path] = raw_text
-        if not lower.endswith(".sty"):
+        if not norm_path.lower().endswith(".sty"):
             tex_paths.add(norm_path)
 
     return source_lines, tex_paths, raw_contents

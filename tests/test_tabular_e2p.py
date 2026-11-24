@@ -9,18 +9,18 @@ import httpx
 import pytest
 
 from ai.agents.editor.gateway.contracts import EditorDocument, EditorFileInfo, EditorScope
+from ai.agents.editor.github.client import HttpGitHubArtifactClient
+from ai.agents.editor.github.contracts import GitHubArtifactContent, GitHubArtifactError
+from ai.agents.editor.tabular.builder import render_latex_booktabs
+from ai.agents.editor.tabular.contracts import MetricDirection, TableStyleOptions
+from ai.agents.editor.tabular.heuristics import infer_metric_direction, is_proposed_method_name
+from ai.agents.editor.tabular.parser import TabularDataParser
 from ai.agents.editor.tools.contracts import EditorToolRuntime
 from ai.agents.editor.tools.table import (
     InsertExperimentTableArgs,
     build_table_tools,
     handle_insert_experiment_table,
 )
-from ai.shared.github.client import HttpGitHubArtifactClient
-from ai.shared.github.contracts import GitHubArtifactContent, GitHubArtifactError
-from ai.shared.tabular.builder import LatexBooktabsBuilder
-from ai.shared.tabular.contracts import MetricDirection, TableStyleOptions
-from ai.shared.tabular.heuristics import infer_metric_direction, is_proposed_method_name
-from ai.shared.tabular.parser import TabularDataParser
 
 
 def test_heuristic_metric_polarities_and_proposed_methods() -> None:
@@ -123,9 +123,9 @@ ResNet-50,76.2,0.85
 Ours,84.6,0.48
 """
     matrix = TabularDataParser(precision=2).parse_csv(csv_data)
-    builder = LatexBooktabsBuilder(
-        matrix=matrix,
-        options=TableStyleOptions(
+    latex = render_latex_booktabs(
+        matrix,
+        TableStyleOptions(
             caption="ImageNet Evaluation",
             label="tab:imagenet",
             position="t",
@@ -133,7 +133,6 @@ Ours,84.6,0.48
             notes="Evaluated on test set.",
         ),
     )
-    latex = builder.build()
 
     assert "\\begin{table}[t]" in latex
     assert "\\centering" in latex

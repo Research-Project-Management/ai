@@ -1,4 +1,4 @@
-"""Deterministic anchor search/replace resolution using a Chain of Responsibility (0 LLM)."""
+"""Deterministic anchor search/replace resolution with ordered fallback matchers."""
 
 from __future__ import annotations
 

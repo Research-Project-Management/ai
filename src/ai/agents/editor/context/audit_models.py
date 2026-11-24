@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from pydantic import BaseModel, ConfigDict
 
@@ -62,7 +62,7 @@ class MissingPackageIssue(BaseModel):
 
 
 class PageStructureReport(BaseModel):
-    """Full structural, x-ref, include-graph & package report (0 LLM / 0 I/O)."""
+    """Full structural, cross-reference, include-graph, and package audit report."""
 
     model_config = ConfigDict(frozen=True)
 
@@ -113,7 +113,6 @@ class AuditAccumulator:
     unreferenced_labels: tuple[str, ...] = ()
     orphan_tex_files: tuple[str, ...] = ()
     missing_packages: tuple[MissingPackageIssue, ...] = ()
-    extra_notes: list[str] = field(default_factory=list)
 
 
 __all__ = [

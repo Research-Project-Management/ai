@@ -10,9 +10,9 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from ai.agents.editor.context.latex_scanner import normalize_path
 from ai.agents.editor.gateway.contracts import EditorGateway, EditorScope
+from ai.agents.editor.github.contracts import GitHubArtifactGateway
 from ai.agents.editor.patching.contracts import EditorPatchProposal
 from ai.orchestrator.contracts import CitationItem
-from ai.shared.github.contracts import GitHubArtifactGateway
 from ai.shared.workflow.registry import ToolRegistry
 
 EditorRiskTier = Literal["read", "propose", "write"]
@@ -123,7 +123,7 @@ class EditorToolSpec(BaseModel):
 
 
 class EditorToolRegistry(ToolRegistry[EditorToolSpec]):
-    """OCP registry of editor tools used for planner formatting and policy gates."""
+    """Registry of editor tools used for planner formatting and policy gates."""
 
     label = "editor"
 
@@ -132,7 +132,7 @@ def build_default_editor_tool_registry(
     *,
     artifact_client: GitHubArtifactGateway | None = None,
 ) -> EditorToolRegistry:
-    """Assemble File, Analysis, Propose-Edit, Table, and HITL-Write tools into an OCP registry."""
+    """Assemble file, analysis, patch proposal, table, and write tools into a registry."""
     from ai.agents.editor.tools.analysis import build_analysis_tools
     from ai.agents.editor.tools.file_ops import build_file_tools
     from ai.agents.editor.tools.patch import build_patch_tools

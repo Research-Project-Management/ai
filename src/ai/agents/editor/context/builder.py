@@ -3,10 +3,26 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import Any
+from typing import Any, Final
 
 from ai.agents.editor.context.contracts import CompileErrorItem, EditorContextSnapshot
+from ai.agents.editor.context.latex_scanner import normalize_newlines
 from ai.agents.editor.context.preamble import extract_local_symbols, extract_preamble_summary
+
+_DEFAULT_COMPILE_ERROR_LIMIT: Final[int] = 15
+_MAX_ERROR_MESSAGE_CHARS: Final[int] = 400
+_MAX_ERROR_CONTEXT_CHARS: Final[int] = 300
+_MIN_LINE_NUMBER_WIDTH: Final[int] = 3
+_DEFAULT_VIEWPORT_RADIUS_LINES: Final[int] = 45
+_DEFAULT_MAX_VIEWPORT_CHARS: Final[int] = 16_000
+_MAX_STRUCTURE_SUMMARY_CHARS: Final[int] = 3000
+_FULL_FILE_LINE_THRESHOLD: Final[int] = 220
+_MAX_SELECTION_CHARS: Final[int] = 6000
+_MAX_LOCAL_SYMBOLS: Final[int] = 60
+_MAX_PROMPT_PACKAGES: Final[int] = 25
+_MAX_PROMPT_MACROS: Final[int] = 20
+_MAX_PROMPT_SYMBOLS: Final[int] = 25
+_MAX_PROMPT_COMPILE_ERRORS: Final[int] = 10
 
 
 def _to_int_or_none(val: Any) -> int | None:
@@ -24,10 +40,12 @@ def _to_int_or_none(val: Any) -> int | None:
 def _clean_text(val: Any) -> str:
     if val is None:
         return ""
-    return str(val).replace("\r\n", "\n").replace("\r", "\n")
+    return normalize_newlines(str(val))
 
 
-def normalize_compile_errors(raw: Any, *, limit: int = 15) -> tuple[CompileErrorItem, ...]:
+def normalize_compile_errors(
+    raw: Any, *, limit: int = _DEFAULT_COMPILE_ERROR_LIMIT
+) -> tuple[CompileErrorItem, ...]:
     """Normalize compiler diagnostic payloads (list, dict `{errors, warnings}`, or string)."""
     items: list[CompileErrorItem] = []
 
@@ -37,7 +55,11 @@ def normalize_compile_errors(raw: Any, *, limit: int = 15) -> tuple[CompileError
         if isinstance(entry, str):
             text = entry.strip()
             if text:
-                items.append(CompileErrorItem(severity=default_severity, message=text[:400]))
+                items.append(
+                    CompileErrorItem(
+                        severity=default_severity, message=text[:_MAX_ERROR_MESSAGE_CHARS]
+                    )
+                )
             return
         if isinstance(entry, dict):
             msg = str(
@@ -51,9 +73,9 @@ def normalize_compile_errors(raw: Any, *, limit: int = 15) -> tuple[CompileError
                     file=str(entry.get("file") or entry.get("filePath") or "").strip().lstrip("/"),
                     severity=str(entry.get("severity") or default_severity).strip().lower()
                     or default_severity,
-                    message=msg[:400],
+                    message=msg[:_MAX_ERROR_MESSAGE_CHARS],
                     context=str(entry.get("context") or entry.get("rawExcerpt") or "").strip()[
-                        :300
+                        :_MAX_ERROR_CONTEXT_CHARS
                     ],
                 )
             )
@@ -85,7 +107,7 @@ def _format_numbered_lines(
 ) -> tuple[str, int]:
     if not lines:
         return "", start_line - 1
-    width = max(3, len(str(start_line + len(lines) - 1)))
+    width = max(_MIN_LINE_NUMBER_WIDTH, len(str(start_line + len(lines) - 1)))
     rendered: list[str] = []
     used_chars = 0
     last_line = start_line - 1
@@ -107,8 +129,8 @@ def build_editor_context_snapshot(
     raw_context: Mapping[str, Any] | None,
     *,
     active_content_override: str | None = None,
-    viewport_radius_lines: int = 45,
-    max_chars: int = 16_000,
+    viewport_radius_lines: int = _DEFAULT_VIEWPORT_RADIUS_LINES,
+    max_chars: int = _DEFAULT_MAX_VIEWPORT_CHARS,
 ) -> EditorContextSnapshot:
     """Build a bounded, line-numbered snapshot of the active LaTeX file and IDE focus."""
     ctx = raw_context or {}
@@ -136,7 +158,7 @@ def build_editor_context_snapshot(
     current_environment = str(ctx.get("current_environment") or "").strip()
     structure_summary = _clean_text(
         ctx.get("document_structure_summary") or ctx.get("document_structure")
-    ).strip()[:3000]
+    ).strip()[:_MAX_STRUCTURE_SUMMARY_CHARS]
     compile_errors = normalize_compile_errors(ctx.get("compile_errors"))
 
     preamble = extract_preamble_summary(content)
@@ -148,7 +170,7 @@ def build_editor_context_snapshot(
     viewport_numbered = ""
 
     if total_lines > 0:
-        if total_lines <= 220 and len(content) <= max_chars:
+        if total_lines <= _FULL_FILE_LINE_THRESHOLD and len(content) <= max_chars:
             viewport_numbered, viewport_end = _format_numbered_lines(
                 lines,
                 start_line=1,
@@ -180,15 +202,15 @@ def build_editor_context_snapshot(
         total_lines=total_lines,
         cursor_line=cursor_line,
         cursor_column=cursor_column,
-        selection_text=selection_text[:6000],
+        selection_text=selection_text[:_MAX_SELECTION_CHARS],
         selection_start_line=sel_start,
         selection_end_line=sel_end,
         current_section=current_section,
         current_environment=current_environment,
         document_structure_summary=structure_summary,
         preamble=preamble,
-        local_labels=local_labels[:60],
-        local_citations=local_citations[:60],
+        local_labels=local_labels[:_MAX_LOCAL_SYMBOLS],
+        local_citations=local_citations[:_MAX_LOCAL_SYMBOLS],
         compile_errors=compile_errors,
         viewport_start_line=viewport_start if total_lines > 0 else 1,
         viewport_end_line=viewport_end,
@@ -222,17 +244,21 @@ def format_context_for_prompt(snapshot: EditorContextSnapshot) -> str:
 
     if snapshot.preamble.document_class or snapshot.preamble.packages:
         cls_text = snapshot.preamble.document_class or "unknown"
-        pkg_text = ", ".join(snapshot.preamble.packages[:25]) or "none detected"
+        pkg_text = ", ".join(snapshot.preamble.packages[:_MAX_PROMPT_PACKAGES]) or "none detected"
         meta_lines.append(f"- Preamble: `\\documentclass{{{cls_text}}}` | packages: [{pkg_text}]")
     if snapshot.preamble.custom_macros:
         meta_lines.append(
-            f"- Custom macros in active file: {', '.join(snapshot.preamble.custom_macros[:20])}"
+            "- Custom macros in active file: "
+            f"{', '.join(snapshot.preamble.custom_macros[:_MAX_PROMPT_MACROS])}"
         )
     if snapshot.local_labels:
-        meta_lines.append(f"- Local `\\label`s: {', '.join(snapshot.local_labels[:25])}")
+        meta_lines.append(
+            f"- Local `\\label`s: {', '.join(snapshot.local_labels[:_MAX_PROMPT_SYMBOLS])}"
+        )
     if snapshot.local_citations:
         meta_lines.append(
-            f"- Cited keys in active file: {', '.join(snapshot.local_citations[:25])}"
+            "- Cited keys in active file: "
+            f"{', '.join(snapshot.local_citations[:_MAX_PROMPT_SYMBOLS])}"
         )
 
     sections: list[str] = ["## Active Editor Context\n" + "\n".join(meta_lines)]
@@ -251,7 +277,7 @@ def format_context_for_prompt(snapshot: EditorContextSnapshot) -> str:
 
     if snapshot.compile_errors:
         err_lines = []
-        for err in snapshot.compile_errors[:10]:
+        for err in snapshot.compile_errors[:_MAX_PROMPT_COMPILE_ERRORS]:
             loc = f"{err.file or snapshot.active_file_path}"
             if err.line is not None:
                 loc += f":L{err.line}"

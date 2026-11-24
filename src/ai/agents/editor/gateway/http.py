@@ -29,7 +29,12 @@ from ai.agents.editor.gateway.mapping import (
     project_symbol_catalog,
 )
 from ai.shared.contracts.auth import get_delegation_token
-from ai.shared.gateway.transport import BackendTransport
+from ai.shared.gateway.transport import BackendTransport, encode_seg
+
+
+def editor_page_route(page_id: str) -> str:
+    """Return the REST path for a single page resource."""
+    return f"/api/v1/pages/pages/{encode_seg(page_id)}"
 
 
 class HttpEditorGateway:
@@ -79,16 +84,6 @@ class HttpEditorGateway:
         target = (doc_id or scope.active_file_id or self._require_page_id(scope)).strip()
         return quote(target, safe="")
 
-    async def _request(
-        self,
-        method: str,
-        path: str,
-        *,
-        params: dict[str, Any] | None = None,
-        json_body: dict[str, Any] | None = None,
-    ) -> Any:
-        return await self._transport.request(method, path, params=params, json_body=json_body)
-
     async def list_files(
         self,
         scope: EditorScope,
@@ -96,7 +91,7 @@ class HttpEditorGateway:
         include_content: bool = False,
     ) -> list[EditorFileInfo]:
         page_id = self._encoded_page_id(scope)
-        raw = await self._request(
+        raw = await self._transport.request(
             "GET",
             f"/api/v1/pages/docs/{page_id}/files",
             params={"includeContent": "true" if include_content else "false"},
@@ -105,17 +100,18 @@ class HttpEditorGateway:
 
     async def read_file(self, scope: EditorScope, doc_id: str) -> EditorDocument:
         del scope
-        target = quote(doc_id.strip(), safe="")
-        if not target:
+        if not doc_id.strip():
             raise EditorGatewayError(400, "read_file requires a non-empty document ID")
-        raw = await self._request("GET", f"/api/v1/pages/pages/{target}")
+        raw = await self._transport.request("GET", editor_page_route(doc_id))
         if not isinstance(raw, dict):
             raise EditorGatewayError(502, "Unexpected document payload format from Backend")
         return project_document(raw, doc_id=doc_id)
 
     async def get_symbols(self, scope: EditorScope) -> EditorSymbolCatalog:
         page_id = self._encoded_page_id(scope)
-        raw = await self._request("GET", f"/api/v1/pages/pages/{page_id}/structure/symbols")
+        raw = await self._transport.request(
+            "GET", f"/api/v1/pages/pages/{page_id}/structure/symbols"
+        )
         return project_symbol_catalog(raw)
 
     async def search_pages(
@@ -145,7 +141,9 @@ class HttpEditorGateway:
         if clean_ids:
             body["fileIds"] = clean_ids
 
-        raw = await self._request("POST", f"/api/v1/pages/pages/{page_id}/search", json_body=body)
+        raw = await self._transport.request(
+            "POST", f"/api/v1/pages/pages/{page_id}/search", json_body=body
+        )
         return project_search_hits(raw, max_results=capped)
 
     async def list_citations(
@@ -159,13 +157,13 @@ class HttpEditorGateway:
         capped = max(1, min(limit, 500))
         clean_query = query.strip()
         if clean_query:
-            raw = await self._request(
+            raw = await self._transport.request(
                 "GET",
                 f"/api/v1/pages/pages/{page_id}/citations/search",
                 params={"query": clean_query, "limit": capped},
             )
         else:
-            raw = await self._request(
+            raw = await self._transport.request(
                 "GET",
                 f"/api/v1/pages/pages/{page_id}/citations",
                 params={"limit": capped},
@@ -174,7 +172,9 @@ class HttpEditorGateway:
 
     async def validate_citations(self, scope: EditorScope) -> dict[str, Any]:
         page_id = self._encoded_page_id(scope)
-        raw = await self._request("GET", f"/api/v1/pages/pages/{page_id}/citations/validate")
+        raw = await self._transport.request(
+            "GET", f"/api/v1/pages/pages/{page_id}/citations/validate"
+        )
         return raw if isinstance(raw, dict) else {"result": raw}
 
     async def lint_pages(
@@ -187,13 +187,15 @@ class HttpEditorGateway:
         page_id = self._encoded_page_id(scope)
         if content is not None:
             filename = (file_path or scope.active_file_path or "main.tex").lstrip("/") or "main.tex"
-            raw = await self._request(
+            raw = await self._transport.request(
                 "POST",
                 f"/api/v1/pages/diagnostics/pages/{page_id}/lint-doc",
                 json_body={"content": content, "filename": filename, "pageId": scope.page_id},
             )
         else:
-            raw = await self._request("POST", f"/api/v1/pages/diagnostics/pages/{page_id}/lint")
+            raw = await self._transport.request(
+                "POST", f"/api/v1/pages/diagnostics/pages/{page_id}/lint"
+            )
         return raw if isinstance(raw, dict) else {"result": raw}
 
     async def list_review_comments(
@@ -208,7 +210,7 @@ class HttpEditorGateway:
         if status and status.strip().lower() in {"open", "resolved"}:
             params["status"] = status.strip().lower()
 
-        raw = await self._request(
+        raw = await self._transport.request(
             "GET",
             f"/api/v1/pages/pages/{encoded_id}/comments",
             params=params or None,
@@ -227,7 +229,7 @@ class HttpEditorGateway:
         if status and status.strip().lower() in {"pending", "accepted", "rejected"}:
             params["status"] = status.strip().lower()
 
-        raw = await self._request(
+        raw = await self._transport.request(
             "GET",
             f"/api/v1/pages/pages/{encoded_id}/suggestions",
             params=params or None,
@@ -251,7 +253,7 @@ class HttpEditorGateway:
             body["rawBibtex"] = raw_bibtex.strip()
         if entries:
             body["entries"] = list(entries)
-        raw = await self._request(
+        raw = await self._transport.request(
             "POST",
             f"/api/v1/pages/pages/{page_id}/citations/entries",
             json_body=body,
@@ -271,7 +273,7 @@ class HttpEditorGateway:
             "targetBibFile": target_bib_file.strip() or "references.bib",
             "pageId": scope.page_id,
         }
-        raw = await self._request(
+        raw = await self._transport.request(
             "POST",
             f"/api/v1/pages/pages/{page_id}/citations/resolve",
             json_body=body,
@@ -291,7 +293,7 @@ class HttpEditorGateway:
             "targetBibFile": target_bib_file.strip() or "references.bib",
             "pageId": scope.page_id,
         }
-        raw = await self._request(
+        raw = await self._transport.request(
             "POST",
             f"/api/v1/pages/pages/{page_id}/citations/sync-library",
             json_body=body,
@@ -323,7 +325,7 @@ class HttpEditorGateway:
         }
         if scope.space_id.strip():
             body["spaceId"] = scope.space_id.strip()
-        raw = await self._request(
+        raw = await self._transport.request(
             "POST",
             f"/api/v1/pages/pages/{encoded_id}/suggestions",
             json_body=body,
@@ -347,7 +349,7 @@ class HttpEditorGateway:
             body["content"] = content
         if template_type is not None and template_type.strip():
             body["templateType"] = template_type.strip()
-        raw = await self._request(
+        raw = await self._transport.request(
             "POST",
             f"/api/v1/pages/spaces/{space_id}/pages",
             json_body=body,

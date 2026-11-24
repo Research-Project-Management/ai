@@ -42,8 +42,8 @@ from ai.agents.editor.patching.matcher import check_patch_overlap, resolve_patch
 from ai.agents.editor.patching.validator import validate_patched_latex
 from ai.main import create_app
 from ai.orchestrator.contracts import AgentSpec
+from ai.shared.config.agents import EditorConfig
 from ai.shared.config.database import DatabaseConfig, PostgresConfig, QdrantConfig, RedisConfig
-from ai.shared.config.editor import EditorConfig
 from ai.shared.config.embedding import EmbeddingConfig
 from ai.shared.config.llm import LLMConfig
 from ai.shared.config.server import AppEnvironment, ServerConfig
@@ -1575,16 +1575,15 @@ async def test_editor_design_patterns_extensibility() -> None:
     from ai.agents.editor.workflow.events import NullEditorEvents
     from ai.agents.editor.workflow.nodes import build_editor_nodes
 
-    class _ForbidTodoRule:
-        def check(self, ctx: ValidationContext) -> tuple[tuple[str, ...], tuple[str, ...]]:
-            if "TODO:" in ctx.patched_clean and "TODO:" not in ctx.orig_clean:
-                return ("Unresolved TODO marker introduced.",), ()
-            return (), ()
+    def _forbid_todo_rule(ctx: ValidationContext) -> tuple[tuple[str, ...], tuple[str, ...]]:
+        if "TODO:" in ctx.patched_clean and "TODO:" not in ctx.orig_clean:
+            return ("Unresolved TODO marker introduced.",), ()
+        return (), ()
 
     val_res = validate_patched_latex(
         "\\section{Intro}\nClean text.\n",
         "\\section{Intro}\nTODO: finish text.\n",
-        rules=(*DEFAULT_VALIDATION_RULES, _ForbidTodoRule()),
+        rules=(*DEFAULT_VALIDATION_RULES, _forbid_todo_rule),
     )
     assert val_res.ok is False
     assert val_res.errors == ("Unresolved TODO marker introduced.",)

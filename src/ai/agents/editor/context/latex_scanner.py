@@ -1,4 +1,4 @@
-"""Shared deterministic LaTeX scanning, masking, and symbol extraction helpers (0 LLM / 0 I/O)."""
+"""Shared deterministic LaTeX scanning, masking, and symbol extraction helpers."""
 
 from __future__ import annotations
 
@@ -26,6 +26,15 @@ def normalize_path(path: str | None) -> str:
     while clean.startswith("./"):
         clean = clean[2:]
     return posixpath.normpath(clean) if clean else ""
+
+
+def is_tex_or_sty_path(path: str, *, is_root: bool = False) -> bool:
+    """Return True if `path` is a `.tex`/`.sty` (or extensionless) source file and not `.bib`."""
+    lower = path.lower()
+    if lower.endswith(".bib"):
+        return False
+    filename = path.rsplit("/", 1)[-1]
+    return is_root or lower.endswith((".tex", ".sty")) or "." not in filename
 
 
 def strip_latex_comments(text: str) -> str:

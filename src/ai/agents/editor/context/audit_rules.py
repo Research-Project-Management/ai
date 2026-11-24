@@ -1,4 +1,4 @@
-"""Strategy rule pipeline for LaTeX structure, cross-reference, and package checks."""
+"""Rule pipeline for LaTeX structure, cross-reference, and package checks."""
 
 from __future__ import annotations
 

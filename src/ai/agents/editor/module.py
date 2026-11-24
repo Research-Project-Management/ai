@@ -8,6 +8,7 @@ import httpx
 
 from ai.agents.editor.gateway.contracts import EditorGateway
 from ai.agents.editor.gateway.http import HttpEditorGateway
+from ai.agents.editor.github.contracts import GitHubArtifactGateway
 from ai.agents.editor.tools.contracts import (
     EditorToolRegistry,
     build_default_editor_tool_registry,
@@ -15,8 +16,7 @@ from ai.agents.editor.tools.contracts import (
 from ai.agents.editor.workflow.contracts import EditorAgentConfig
 from ai.agents.editor.workflow.graph import build_editor_agent_spec
 from ai.orchestrator.contracts import AgentSpec
-from ai.shared.config.editor import EditorConfig
-from ai.shared.github.contracts import GitHubArtifactGateway
+from ai.shared.config.agents import EditorConfig
 from ai.shared.llm.factory import ChatRunnable
 
 

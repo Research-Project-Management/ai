@@ -125,7 +125,7 @@ class EditorReviewSuggestion(BaseModel):
 
 
 class EditorGateway(Protocol):
-    """Zero-trust protocol between `editor_agent` and Flux Pages Backend."""
+    """Protocol between `editor_agent` and the Flux Pages Backend."""
 
     async def list_files(
         self,

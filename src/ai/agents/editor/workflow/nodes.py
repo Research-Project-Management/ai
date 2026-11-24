@@ -1,10 +1,10 @@
-"""SRP workflow node class implementing the 5-node `editor_agent` state machine."""
+"""Workflow node runner implementing the 5-node `editor_agent` state machine."""
 
 from __future__ import annotations
 
 import logging
 from collections.abc import Awaitable, Callable
-from typing import Any, cast
+from typing import Any
 
 from langchain_core.runnables import RunnableConfig
 
@@ -39,7 +39,7 @@ from ai.agents.editor.workflow.state import EditorState
 from ai.shared.llm.factory import ChatRunnable
 from ai.shared.workflow.execute import run_tool_batch
 from ai.shared.workflow.gate import build_confirmation_payload, run_policy_gate
-from ai.shared.workflow.plan import run_plan_step
+from ai.shared.workflow.plan import bind_planner_tools, run_plan_step
 from ai.shared.workflow.synthesize import format_conversation_tail, run_synthesize_step
 
 logger = logging.getLogger(__name__)
@@ -89,17 +89,9 @@ class EditorWorkflowNodes:
             event_publisher or LangGraphEditorEvents()
         )
         self._catalog_text = tool_registry.format_catalog()
-        self._openai_tools = tool_registry.to_openai_tools()
-        self._planner_llm: ChatRunnable = llm
-        self._native_tools_bound = False
-        bind_fn = getattr(llm, "bind_tools", None)
-        if self._openai_tools and callable(bind_fn):
-            try:
-                self._planner_llm = cast(ChatRunnable, bind_fn(self._openai_tools))
-                self._native_tools_bound = True
-            except (NotImplementedError, TypeError):
-                self._planner_llm = llm
-                self._native_tools_bound = False
+        self._planner_llm, self._native_tools_bound = bind_planner_tools(
+            llm, tool_registry.to_openai_tools()
+        )
 
     def _build_scope(
         self,
@@ -161,9 +153,13 @@ class EditorWorkflowNodes:
                     doc.content,
                     True,
                 )
-        except (EditorGatewayError, TimeoutError, OSError):
+        except (EditorGatewayError, TimeoutError, OSError) as exc:
             # Graceful fallback when Backend token/page is unavailable (e.g. stateless preview)
-            pass
+            logger.warning(
+                "editor_agent fallback active file fetch failed for page %s: %s",
+                scope.page_id,
+                exc,
+            )
         return active_file_id, active_file_path, None, False
 
     async def hydrate_context(self, state: EditorState, config: RunnableConfig) -> dict[str, Any]:

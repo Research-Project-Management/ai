@@ -7,23 +7,23 @@ from functools import partial
 
 from pydantic import BaseModel, Field
 
+from ai.agents.editor.github.client import HttpGitHubArtifactClient
+from ai.agents.editor.github.contracts import (
+    GitHubArtifactContent,
+    GitHubArtifactError,
+    GitHubArtifactGateway,
+)
 from ai.agents.editor.patching.contracts import PatchKind
 from ai.agents.editor.patching.pipeline import build_verified_patch
+from ai.agents.editor.tabular.builder import render_latex_booktabs
+from ai.agents.editor.tabular.contracts import TableStyleOptions, TabularMatrix
+from ai.agents.editor.tabular.parser import TabularDataParser
 from ai.agents.editor.tools.contracts import (
     EditorToolResult,
     EditorToolRuntime,
     EditorToolSpec,
 )
 from ai.agents.editor.tools.file_ops import resolve_and_cache_file
-from ai.shared.github.client import HttpGitHubArtifactClient
-from ai.shared.github.contracts import (
-    GitHubArtifactContent,
-    GitHubArtifactError,
-    GitHubArtifactGateway,
-)
-from ai.shared.tabular.builder import LatexBooktabsBuilder
-from ai.shared.tabular.contracts import TableStyleOptions, TabularMatrix
-from ai.shared.tabular.parser import TabularDataParser
 
 
 class InsertExperimentTableArgs(BaseModel):
@@ -101,7 +101,7 @@ def _render_table(
     options = TableStyleOptions(
         caption=args.caption, label=args.label, precision=args.precision, notes=notes
     )
-    return LatexBooktabsBuilder(matrix=matrix, options=options).build()
+    return render_latex_booktabs(matrix, options)
 
 
 def _choose_anchor(content: str, args: InsertExperimentTableArgs) -> tuple[str, PatchKind]:

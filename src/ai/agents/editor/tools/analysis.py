@@ -1,4 +1,4 @@
-"""Read-only citation, lint, review comment, and multi-file structure analysis tools (`Tier 0`)."""
+"""Read-only citation, lint, review comment, and multi-file structure analysis tools."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 from ai.agents.editor.context.citation_audit import audit_citation_gaps
+from ai.agents.editor.context.latex_scanner import is_tex_or_sty_path
 from ai.agents.editor.context.preamble import extract_local_symbols
 from ai.agents.editor.context.structure_audit import audit_page_structure
 from ai.agents.editor.gateway.contracts import EditorGatewayError
@@ -75,14 +76,6 @@ class AuditPageStructureArgs(BaseModel):
         le=100,
         description="Maximum issues to return per structural/ref/package category.",
     )
-
-
-def _is_tex_or_sty(clean_path: str, *, is_root: bool = False) -> bool:
-    lower = clean_path.lower()
-    if lower.endswith(".bib"):
-        return False
-    filename = clean_path.rsplit("/", 1)[-1]
-    return is_root or lower.endswith((".tex", ".sty")) or "." not in filename
 
 
 async def handle_inspect_citations(
@@ -243,7 +236,7 @@ async def handle_audit_page_structure(
     fallback_reads = 0
     for f in files:
         clean_path = f.path.strip().replace("\\", "/").lstrip("/") or f.title
-        if not _is_tex_or_sty(clean_path, is_root=f.is_root):
+        if not is_tex_or_sty_path(clean_path, is_root=f.is_root):
             continue
         if f.is_root:
             root_path = clean_path
@@ -266,7 +259,7 @@ async def handle_audit_page_structure(
 
     for entry in runtime.file_cache.values():
         epath = entry.file_path.strip().replace("\\", "/").lstrip("/")
-        if epath and _is_tex_or_sty(epath):
+        if epath and is_tex_or_sty_path(epath):
             tex_files[epath] = entry.content
 
     if not tex_files:
@@ -294,7 +287,7 @@ async def handle_audit_page_structure(
 
 
 def build_analysis_tools() -> tuple[EditorToolSpec, ...]:
-    """Build Tier-0 citation, lint, review comment, and multi-file structure tools."""
+    """Build read-only citation, lint, review comment, and multi-file structure tools."""
     return (
         EditorToolSpec(
             name="inspect_citations",

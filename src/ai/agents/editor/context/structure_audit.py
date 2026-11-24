@@ -1,4 +1,4 @@
-"""Facade orchestrating multi-file LaTeX page structure auditing via `AuditRule` strategies."""
+"""Orchestrator for multi-file LaTeX page structure auditing across audit rules."""
 
 from __future__ import annotations
 

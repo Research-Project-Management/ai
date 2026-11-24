@@ -1,4 +1,4 @@
-"""Tier-2 HITL-gated bibliography & Track Changes write tools (`risk_tier='write'`)."""
+"""HITL-gated bibliography, page creation, and Track Changes write tools."""
 
 from __future__ import annotations
 
@@ -6,6 +6,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+from ai.agents.editor.context.latex_scanner import normalize_newlines
+from ai.agents.editor.gateway.http import editor_page_route
 from ai.agents.editor.patching.matcher import find_unique_anchor, offset_span_to_line_col
 from ai.agents.editor.tools.contracts import (
     EditorToolResult,
@@ -13,7 +15,6 @@ from ai.agents.editor.tools.contracts import (
     EditorToolSpec,
 )
 from ai.agents.editor.tools.file_ops import resolve_and_cache_file
-from ai.shared.gateway.transport import encode_seg
 from ai.shared.resilience.mutations import MutationRecord, record_turn_mutation
 
 
@@ -221,7 +222,7 @@ async def handle_create_review_suggestion(
             error=f"Cannot create suggestion: missing document ID for '{cached.file_path}'.",
         )
 
-    norm_content = cached.content.replace("\r\n", "\n").replace("\r", "\n")
+    norm_content = normalize_newlines(cached.content)
     span, _strategy, anchor_err = find_unique_anchor(
         norm_content,
         args.search_text,
@@ -277,9 +278,7 @@ async def handle_create_page(
         content=args.content,
         template_type=args.template_type,
     )
-    page_id = str(
-        (created.get("id") or created.get("pageId") or "") if isinstance(created, dict) else ""
-    ).strip()
+    page_id = str(created.get("id") or created.get("pageId") or "").strip()
     if page_id:
         record_turn_mutation(
             MutationRecord(
@@ -288,7 +287,7 @@ async def handle_create_page(
                 entity_id=page_id,
                 label=args.title,
                 undo_method="DELETE",
-                undo_path=f"/api/v1/pages/pages/{encode_seg(page_id)}",
+                undo_path=editor_page_route(page_id),
             )
         )
     return EditorToolResult(tool="create_page", status="ok", data=created)
@@ -323,7 +322,7 @@ def _confirm_create_page(args: dict[str, Any]) -> str:
 
 
 def build_write_tools() -> tuple[EditorToolSpec, ...]:
-    """Build Tier-2 HITL-gated page, bibliography & Track Changes write tools."""
+    """Build HITL-gated page, bibliography, and Track Changes write tools."""
     return (
         EditorToolSpec(
             name="create_page",

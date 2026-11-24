@@ -1,4 +1,4 @@
-"""Read-only page navigation, file slicing, symbol & full-text search tools (`Tier 0`)."""
+"""Read-only page navigation, file slicing, symbol, and full-text search tools."""
 
 from __future__ import annotations
 
@@ -226,7 +226,7 @@ async def handle_search_pages(
 
 
 def build_file_tools() -> tuple[EditorToolSpec, ...]:
-    """Build Tier-0 file navigation, symbol outline, and page search tools."""
+    """Build read-only file navigation, symbol outline, and page search tools."""
     return (
         EditorToolSpec(
             name="list_files",

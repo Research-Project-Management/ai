@@ -1,4 +1,4 @@
-"""Non-destructive anchor-verified patch proposal tool (`Tier 1: propose`)."""
+"""Non-destructive anchor-verified patch proposal tool."""
 
 from __future__ import annotations
 
@@ -98,7 +98,7 @@ async def handle_propose_edit(
 
 
 def build_patch_tools() -> tuple[EditorToolSpec, ...]:
-    """Build Tier-1 non-destructive anchor-verified patch tools."""
+    """Build non-destructive anchor-verified patch tools."""
     return (
         EditorToolSpec(
             name="propose_edit",
