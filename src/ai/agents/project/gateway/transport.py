@@ -1,15 +1,10 @@
-"""Project Backend transport: shared `BackendTransport` bound to `ProjectGatewayError`."""
+"""Shared JSON parsing and URL-encoding helpers for Project REST sub-clients."""
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from typing import Any
 
-import httpx
-
-from ai.agents.project.gateway.contracts import ProjectGatewayError
-from ai.shared.contracts.auth import get_delegation_token
-from ai.shared.gateway.transport import BackendTransport, encode_seg
+from ai.shared.gateway.transport import encode_seg
 
 
 def as_dict(value: Any) -> dict[str, Any]:
@@ -31,31 +26,7 @@ def unwrap_nested_dict(
     return fallback if fallback is not None else {}
 
 
-class ProjectHttpTransport(BackendTransport):
-    """Shared async HTTP transport for the Project REST sub-clients."""
-
-    def __init__(
-        self,
-        *,
-        base_url: str,
-        timeout_seconds: float = 15.0,
-        http_client: httpx.AsyncClient | None = None,
-        token_provider: Callable[[], str] = get_delegation_token,
-        internal_api_key: str = "",
-    ) -> None:
-        super().__init__(
-            base_url=base_url,
-            service="Project",
-            error_factory=ProjectGatewayError,
-            timeout_seconds=timeout_seconds,
-            http_client=http_client,
-            token_provider=token_provider,
-            internal_api_key=internal_api_key,
-        )
-
-
 __all__ = [
-    "ProjectHttpTransport",
     "as_dict",
     "encode_seg",
     "unwrap_nested_dict",

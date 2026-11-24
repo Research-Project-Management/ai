@@ -7,10 +7,11 @@ from collections.abc import Callable
 import httpx
 
 from ai.agents.project.gateway.analytics_client import AnalyticsClient
+from ai.agents.project.gateway.contracts import ProjectGatewayError
 from ai.agents.project.gateway.projects_client import ProjectsClient
-from ai.agents.project.gateway.transport import ProjectHttpTransport
 from ai.agents.project.gateway.work_items_client import WorkItemsClient
 from ai.shared.contracts.auth import get_delegation_token
+from ai.shared.gateway.transport import BackendTransport
 
 
 class HttpProjectGateway:
@@ -25,8 +26,10 @@ class HttpProjectGateway:
         token_provider: Callable[[], str] = get_delegation_token,
         internal_api_key: str = "",
     ) -> None:
-        transport = ProjectHttpTransport(
+        transport = BackendTransport(
             base_url=base_url,
+            service="Project",
+            error_factory=ProjectGatewayError,
             timeout_seconds=timeout_seconds,
             http_client=http_client,
             token_provider=token_provider,

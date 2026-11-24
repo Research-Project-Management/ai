@@ -6,6 +6,8 @@ import json
 from collections.abc import Sequence
 from typing import Any
 
+from ai.shared.workflow.synthesize import format_tool_observations
+
 
 def build_planner_prompt(
     tool_catalog: str,
@@ -67,11 +69,5 @@ def format_observations_block(
     if attached_items:
         rendered_items = json.dumps(list(attached_items), ensure_ascii=False, indent=2)
         sections.append(f"Attached library items:\n{rendered_items}")
-    if not observations:
-        sections.append("Tool observations: (none yet)")
-    else:
-        rendered = json.dumps(list(observations), ensure_ascii=False, indent=2)
-        if len(rendered) > 14_000:
-            rendered = rendered[-14_000:]
-        sections.append(f"Tool observations so far:\n{rendered}")
+    sections.append(format_tool_observations(observations))
     return "\n\n".join(sections)

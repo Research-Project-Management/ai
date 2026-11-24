@@ -8,13 +8,14 @@ import httpx
 
 from ai.agents.editor.gateway.contracts import EditorGateway
 from ai.agents.editor.gateway.http import HttpEditorGateway
-from ai.agents.editor.tools.contracts import EditorToolRegistry
-from ai.agents.editor.tools.registry import build_default_editor_tool_registry
+from ai.agents.editor.tools.contracts import (
+    EditorToolRegistry,
+    build_default_editor_tool_registry,
+)
 from ai.agents.editor.workflow.contracts import EditorAgentConfig
 from ai.agents.editor.workflow.graph import build_editor_agent_spec
 from ai.orchestrator.contracts import AgentSpec
 from ai.shared.config.editor import EditorConfig
-from ai.shared.context.facade import ResearchContextFacade
 from ai.shared.github.contracts import GitHubArtifactGateway
 from ai.shared.llm.factory import ChatRunnable
 
@@ -38,7 +39,6 @@ def build_editor_module(
     http_client: httpx.AsyncClient | None = None,
     internal_api_key: str = "",
     artifact_client: GitHubArtifactGateway | None = None,
-    context_facade: ResearchContextFacade | None = None,
 ) -> EditorModule:
     """Assemble Pages gateway adapter, tool registry, and `editor_agent` AgentSpec."""
     cfg = config or EditorConfig()
@@ -50,7 +50,6 @@ def build_editor_module(
     )
     active_tools = tool_registry or build_default_editor_tool_registry(
         artifact_client=artifact_client,
-        context_facade=context_facade,
     )
     eff_agent_cfg = agent_config or EditorAgentConfig(
         max_steps=cfg.max_steps,

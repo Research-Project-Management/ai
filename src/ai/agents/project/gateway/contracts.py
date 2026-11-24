@@ -380,13 +380,11 @@ class WorkItemsPort(Protocol):
 
 
 class AnalyticsPort(Protocol):
-    """Project KPIs and the user's cross-project overview."""
+    """Project KPIs."""
 
     async def get_project_analytics(
         self, scope: ProjectScope, project_id: str
     ) -> ProjectAnalytics: ...
-
-    async def get_user_overview(self, scope: ProjectScope) -> dict[str, Any]: ...
 
 
 class ProjectGateway(Protocol):

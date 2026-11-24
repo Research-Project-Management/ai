@@ -4,8 +4,6 @@ from typing import Any, Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from ai.shared.contracts.knowledge import KnowledgeChunkInput
-
 
 class UnsupportedDocumentFormatError(ValueError):
     """Raised when an inbound file matches no registered DocumentParser."""
@@ -46,15 +44,6 @@ class DocumentParser(Protocol):
 
     def parse_bytes(self, data: bytes, *, filename: str = "") -> ParsedDocument:
         """Parse binary document bytes into structured Markdown pages."""
-        ...
-
-
-@runtime_checkable
-class ChunkingStrategy(Protocol):
-    """Port interface for transforming a ParsedDocument into contextual chunks."""
-
-    def chunk(self, document: ParsedDocument, *, title: str = "") -> list[KnowledgeChunkInput]:
-        """Split a parsed document into contextualized chunks ready for indexing."""
         ...
 
 

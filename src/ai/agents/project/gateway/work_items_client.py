@@ -13,11 +13,11 @@ from ai.agents.project.gateway.contracts import (
     WorkItemSummary,
 )
 from ai.agents.project.gateway.transport import (
-    ProjectHttpTransport,
     as_dict,
     encode_seg,
     unwrap_nested_dict,
 )
+from ai.shared.gateway.transport import BackendTransport
 
 
 def _compute_is_overdue(due_date: str | None, completed: bool, explicit: Any) -> bool:
@@ -141,7 +141,7 @@ def _parse_comment(item: dict[str, Any]) -> WorkItemComment:
 class WorkItemsClient:
     """Adapter for `/api/v1/work-items/...`, `/api/v1/projects/:id/work-items/...` & `/your-work`."""
 
-    def __init__(self, transport: ProjectHttpTransport) -> None:
+    def __init__(self, transport: BackendTransport) -> None:
         self._transport = transport
 
     async def list_work_items(

@@ -146,13 +146,6 @@ def build_default_fetch_ladder(
     if allow_remote:
         stages.extend(
             (
-                SafeHttpFetchStage(
-                    timeout_seconds=config.timeout_seconds,
-                    max_fetch_bytes=config.max_fetch_bytes,
-                    user_agent=config.user_agent,
-                    dns_resolver=dns_resolver,
-                    http_client=http_client,
-                ),
                 OpenAcademicMirrorStage(
                     openalex_base_url=config.openalex_base_url,
                     openalex_api_key=config.openalex_api_key.get_secret_value(),
@@ -161,6 +154,13 @@ def build_default_fetch_ladder(
                     crossref_base_url=config.crossref_base_url,
                     timeout_seconds=config.timeout_seconds,
                     user_agent=config.user_agent,
+                    http_client=http_client,
+                ),
+                SafeHttpFetchStage(
+                    timeout_seconds=config.timeout_seconds,
+                    max_fetch_bytes=config.max_fetch_bytes,
+                    user_agent=config.user_agent,
+                    dns_resolver=dns_resolver,
                     http_client=http_client,
                 ),
             )

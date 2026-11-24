@@ -122,10 +122,10 @@ def build_rag_nodes(
     async def evaluate_crag(state: RagState) -> dict[str, Any]:
         ranked_desc = state.get("ranked_desc") or []
         if len(ranked_desc) >= agent_config.min_passages:
-            return {"abstain": False}
+            return {"abstain": False, "next_route": "answer"}
         if state.get("attempt", 1) < agent_config.max_attempts:
-            return {"abstain": False}
-        return {"abstain": True}
+            return {"abstain": False, "next_route": "retry"}
+        return {"abstain": True, "next_route": "answer"}
 
     async def generate_answer(state: RagState, config: RunnableConfig) -> dict[str, Any]:
         ranked_desc = state.get("ranked_desc") or []

@@ -13,7 +13,7 @@ from ai.agents.web_search.fetch.extractor import extract_urls_from_text
 from ai.agents.web_search.fetch.ladder import UrlFetchLadder
 from ai.agents.web_search.search.contracts import normalize_domain_entry
 from ai.agents.web_search.search.registry import SearchProviderRegistry
-from ai.agents.web_search.workflow.contracts import SearchMode, WebSearchAgentConfig
+from ai.agents.web_search.workflow.contracts import VALID_MODES, SearchMode, WebSearchAgentConfig
 from ai.agents.web_search.workflow.nodes import build_web_search_nodes
 from ai.agents.web_search.workflow.state import WebSearchState
 from ai.orchestrator.contracts import AgentOutput, AgentSpec
@@ -21,8 +21,6 @@ from ai.orchestrator.state import RootState
 from ai.shared.contracts.run_control import RunUsage
 from ai.shared.llm.factory import ChatRunnable
 from ai.shared.workflow.turn import latest_query, recent_tail
-
-_VALID_MODES: frozenset[str] = frozenset({"direct_url", "scholar", "web", "hybrid"})
 
 
 def _extract_string_list(primary: Any, secondary: Any = None) -> list[str]:
@@ -63,14 +61,7 @@ def build_web_search_subgraph(
     )
 
     def _route_after_eval(state: WebSearchState) -> str:
-        if state.get("abstain", False):
-            return "answer"
-        ranked = state.get("ranked_desc") or []
-        if len(ranked) >= cfg.min_evidence_count:
-            return "answer"
-        if int(state.get("round_index", 1)) < cfg.max_rounds:
-            return "retry"
-        return "answer"
+        return state.get("next_route", "answer")
 
     builder = StateGraph(WebSearchState)
     builder.add_node("plan_search", nodes["plan_search"])
@@ -156,7 +147,7 @@ def build_web_search_agent_spec(
             str(context.get("search_mode") or configurable.get("search_mode") or "").strip().lower()
         )
         mode_override: SearchMode | None = (
-            cast(SearchMode, raw_mode) if raw_mode in _VALID_MODES else None
+            cast(SearchMode, raw_mode) if raw_mode in VALID_MODES else None
         )
 
         # Air-Gap guarantee: pass ONLY recent user/assistant prompt turns & explicit external context,

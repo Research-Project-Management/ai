@@ -4,9 +4,8 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Awaitable, Callable
-from typing import Any
+from typing import Any, cast
 
-from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
 
 from ai.agents.editor.context.builder import (
@@ -28,8 +27,8 @@ from ai.agents.editor.tools.contracts import (
 )
 from ai.agents.editor.workflow.contracts import EditorAgentConfig
 from ai.agents.editor.workflow.events import (
-    EditorEventPublisher,
     LangGraphEditorEvents,
+    NullEditorEvents,
 )
 from ai.agents.editor.workflow.prompts import (
     build_planner_prompt,
@@ -37,12 +36,11 @@ from ai.agents.editor.workflow.prompts import (
     format_observations_block,
 )
 from ai.agents.editor.workflow.state import EditorState
-from ai.shared.contracts.run_control import RunUsage
 from ai.shared.llm.factory import ChatRunnable
-from ai.shared.llm.output import extract_text, strip_reasoning
 from ai.shared.workflow.execute import run_tool_batch
 from ai.shared.workflow.gate import build_confirmation_payload, run_policy_gate
 from ai.shared.workflow.plan import run_plan_step
+from ai.shared.workflow.synthesize import format_conversation_tail, run_synthesize_step
 
 logger = logging.getLogger(__name__)
 
@@ -81,14 +79,27 @@ class EditorWorkflowNodes:
         gateway: EditorGateway,
         tool_registry: EditorToolRegistry,
         agent_config: EditorAgentConfig,
-        event_publisher: EditorEventPublisher | None = None,
+        event_publisher: LangGraphEditorEvents | NullEditorEvents | None = None,
     ) -> None:
         self._llm = llm
         self._gateway = gateway
         self._tool_registry = tool_registry
         self._agent_config = agent_config
-        self._events: EditorEventPublisher = event_publisher or LangGraphEditorEvents()
+        self._events: LangGraphEditorEvents | NullEditorEvents = (
+            event_publisher or LangGraphEditorEvents()
+        )
         self._catalog_text = tool_registry.format_catalog()
+        self._openai_tools = tool_registry.to_openai_tools()
+        self._planner_llm: ChatRunnable = llm
+        self._native_tools_bound = False
+        bind_fn = getattr(llm, "bind_tools", None)
+        if self._openai_tools and callable(bind_fn):
+            try:
+                self._planner_llm = cast(ChatRunnable, bind_fn(self._openai_tools))
+                self._native_tools_bound = True
+            except (NotImplementedError, TypeError):
+                self._planner_llm = llm
+                self._native_tools_bound = False
 
     def _build_scope(
         self,
@@ -233,17 +244,15 @@ class EditorWorkflowNodes:
 
     async def plan_and_act(self, state: EditorState, config: RunnableConfig) -> dict[str, Any]:
         query = str(state.get("query") or "")
-        tail = state.get("conversation_tail") or []
-        tail_block = "Recent conversation:\n" + "\n".join(tail) + "\n\n" if tail else ""
         next_step = int(state.get("step", 0)) + 1
         return await run_plan_step(
-            self._llm,
+            self._planner_llm,
             system_prompt=build_planner_prompt(
                 self._catalog_text,
                 step=next_step,
                 max_steps=self._agent_config.max_steps,
             ),
-            user_content=tail_block
+            user_content=format_conversation_tail(state.get("conversation_tail"))
             + format_observations_block(
                 query=query,
                 context_snapshot_text=str(state.get("context_snapshot_text") or ""),
@@ -255,6 +264,7 @@ class EditorWorkflowNodes:
             step=next_step,
             prior_usage=state.get("usage"),
             max_calls=6,
+            native_tools_bound=self._native_tools_bound,
         )
 
     async def policy_gate(self, state: EditorState, config: RunnableConfig) -> dict[str, Any]:
@@ -307,44 +317,26 @@ class EditorWorkflowNodes:
     async def synthesize_response(
         self, state: EditorState, config: RunnableConfig
     ) -> dict[str, Any]:
-        draft = str(state.get("draft_answer") or "").strip()
         patches = state.get("patches") or []
-        peer_findings = state.get("peer_findings") or []
-        observations = state.get("observations") or []
-
-        # Fast-path direct answer only when no verified patches need Patch Card framing
-        if draft and not patches:
-            return {"final_answer": draft}
-
-        query = str(state.get("query") or "")
-        tail = state.get("conversation_tail") or []
-        tail_block = "Recent conversation:\n" + "\n".join(tail) + "\n\n" if tail else ""
-        user_content = tail_block + format_observations_block(
-            query=query,
-            context_snapshot_text=str(state.get("context_snapshot_text") or ""),
-            observations=observations,
-            patches=patches,
-            peer_findings=peer_findings,
-        )
-        has_citations = bool(state.get("citations"))
-
-        response = await self._llm.ainvoke(
-            [
-                SystemMessage(
-                    content=build_synthesizer_prompt(
-                        has_patches=bool(patches),
-                        has_citations=has_citations,
-                    )
-                ),
-                HumanMessage(content=user_content),
-            ],
+        return await run_synthesize_step(
+            self._llm,
+            draft_answer=state.get("draft_answer"),
+            allow_draft_fast_path=not patches,
+            system_prompt=build_synthesizer_prompt(
+                has_patches=bool(patches),
+                has_citations=bool(state.get("citations")),
+            ),
+            user_content=format_observations_block(
+                query=str(state.get("query") or ""),
+                context_snapshot_text=str(state.get("context_snapshot_text") or ""),
+                observations=state.get("observations") or (),
+                patches=patches,
+                peer_findings=state.get("peer_findings") or (),
+            ),
+            conversation_tail=state.get("conversation_tail"),
+            prior_usage=state.get("usage"),
             config=config,
         )
-        prior_usage = state.get("usage") or RunUsage()
-        return {
-            "final_answer": strip_reasoning(extract_text(response.content)),
-            "usage": prior_usage.merge(RunUsage.from_message(response)),
-        }
 
 
 def build_editor_nodes(
@@ -353,7 +345,7 @@ def build_editor_nodes(
     gateway: EditorGateway,
     tool_registry: EditorToolRegistry,
     agent_config: EditorAgentConfig,
-    event_publisher: EditorEventPublisher | None = None,
+    event_publisher: LangGraphEditorEvents | NullEditorEvents | None = None,
 ) -> dict[str, Callable[..., Awaitable[dict[str, Any]]]]:
     """Build pure async LangGraph node callables for `editor_agent`."""
     runner = EditorWorkflowNodes(

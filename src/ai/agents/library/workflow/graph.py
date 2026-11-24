@@ -8,8 +8,7 @@ from langchain_core.runnables import RunnableConfig
 from langgraph.graph.state import CompiledStateGraph
 
 from ai.agents.library.gateway.contracts import LibraryGateway
-from ai.agents.library.tools.contracts import LibraryToolRegistry
-from ai.agents.library.tools.registry import build_default_tool_registry
+from ai.agents.library.tools.contracts import LibraryToolRegistry, build_default_tool_registry
 from ai.agents.library.workflow.contracts import LibraryAgentConfig
 from ai.agents.library.workflow.nodes import build_library_nodes
 from ai.agents.library.workflow.state import LibraryState

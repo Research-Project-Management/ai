@@ -627,10 +627,6 @@ class InMemoryFakeProjectGateway:
             assignee=[{"userId": "usr-minh", "name": "Minh Nguyen", "count": 1, "overdueCount": 1}],
         )
 
-    async def get_user_overview(self, scope: ProjectScope) -> dict[str, Any]:
-        self._record("get_user_overview", space_id=scope.space_id)
-        return {"projects": 1, "assignedWorkItems": 1}
-
 
 def _parse_sse(raw_body: str) -> list[tuple[str, dict[str, Any]]]:
     events: list[tuple[str, dict[str, Any]]] = []

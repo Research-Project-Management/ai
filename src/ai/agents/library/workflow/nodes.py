@@ -4,9 +4,8 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Awaitable, Callable
-from typing import Any
+from typing import Any, cast
 
-from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
 
 from ai.agents.library.gateway.contracts import (
@@ -24,13 +23,12 @@ from ai.agents.library.workflow.prompts import (
     format_observations_block,
 )
 from ai.agents.library.workflow.state import LibraryState
-from ai.shared.contracts.run_control import RunUsage
 from ai.shared.llm.factory import ChatRunnable
-from ai.shared.llm.output import extract_text, strip_reasoning
 from ai.shared.workflow.events import LangGraphToolEvents, ToolEventPublisher
 from ai.shared.workflow.execute import run_tool_batch
 from ai.shared.workflow.gate import run_policy_gate
 from ai.shared.workflow.plan import run_plan_step
+from ai.shared.workflow.synthesize import format_conversation_tail, run_synthesize_step
 
 logger = logging.getLogger(__name__)
 
@@ -71,20 +69,29 @@ class LibraryWorkflowNodes:
         self._agent_config = agent_config
         self._events: ToolEventPublisher = event_publisher or LangGraphToolEvents("library_agent")
         self._catalog_text = tool_registry.format_catalog()
+        self._openai_tools = tool_registry.to_openai_tools()
+        self._planner_llm: ChatRunnable = llm
+        self._native_tools_bound = False
+        bind_fn = getattr(llm, "bind_tools", None)
+        if self._openai_tools and callable(bind_fn):
+            try:
+                self._planner_llm = cast(ChatRunnable, bind_fn(self._openai_tools))
+                self._native_tools_bound = True
+            except (NotImplementedError, TypeError):
+                self._planner_llm = llm
+                self._native_tools_bound = False
 
     async def plan_and_act(self, state: LibraryState, config: RunnableConfig) -> dict[str, Any]:
         query = str(state.get("query") or "")
         next_step = int(state.get("step", 0)) + 1
-        tail = state.get("conversation_tail") or []
-        tail_block = "Recent conversation:\n" + "\n".join(tail) + "\n\n" if tail else ""
         return await run_plan_step(
-            self._llm,
+            self._planner_llm,
             system_prompt=build_planner_prompt(
                 self._catalog_text,
                 step=next_step,
                 max_steps=self._agent_config.max_steps,
             ),
-            user_content=tail_block
+            user_content=format_conversation_tail(state.get("conversation_tail"))
             + format_observations_block(
                 query=query,
                 observations=state.get("observations") or [],
@@ -94,6 +101,7 @@ class LibraryWorkflowNodes:
             step=next_step,
             prior_usage=state.get("usage"),
             max_calls=4,
+            native_tools_bound=self._native_tools_bound,
         )
 
     async def policy_gate(self, state: LibraryState, config: RunnableConfig) -> dict[str, Any]:
@@ -143,32 +151,19 @@ class LibraryWorkflowNodes:
     async def synthesize_response(
         self, state: LibraryState, config: RunnableConfig
     ) -> dict[str, Any]:
-        draft = str(state.get("draft_answer") or "").strip()
-        if draft:
-            return {"final_answer": draft}
-
-        query = str(state.get("query") or "")
-        observations = state.get("observations") or []
-        tail = state.get("conversation_tail") or []
-        tail_block = "Recent conversation:\n" + "\n".join(tail) + "\n\n" if tail else ""
-        user_content = tail_block + format_observations_block(
-            query=query,
-            observations=observations,
-            attached_items=state.get("attached_items") or (),
-        )
-
-        response = await self._llm.ainvoke(
-            [
-                SystemMessage(content=build_synthesizer_prompt()),
-                HumanMessage(content=user_content),
-            ],
+        return await run_synthesize_step(
+            self._llm,
+            draft_answer=state.get("draft_answer"),
+            system_prompt=build_synthesizer_prompt(),
+            user_content=format_observations_block(
+                query=str(state.get("query") or ""),
+                observations=state.get("observations") or [],
+                attached_items=state.get("attached_items") or (),
+            ),
+            conversation_tail=state.get("conversation_tail"),
+            prior_usage=state.get("usage"),
             config=config,
         )
-        prior_usage = state.get("usage") or RunUsage()
-        return {
-            "final_answer": strip_reasoning(extract_text(response.content)),
-            "usage": prior_usage.merge(RunUsage.from_message(response)),
-        }
 
 
 def build_library_nodes(

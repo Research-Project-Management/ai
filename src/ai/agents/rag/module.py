@@ -5,7 +5,6 @@ from dataclasses import dataclass
 import httpx
 
 from ai.agents.rag.ingestion.chunker import MarkdownStructureChunker
-from ai.agents.rag.ingestion.contracts import ChunkingStrategy
 from ai.agents.rag.ingestion.lazy_indexer import (
     FileContentFetcher,
     HttpFileContentFetcher,
@@ -29,7 +28,7 @@ class RagModule:
     """Assembled RAG dependencies exposed cleanly for Composition Root wiring."""
 
     parser_registry: ParserRegistry
-    chunker: ChunkingStrategy
+    chunker: MarkdownStructureChunker
     ingestion_pipeline: IngestionPipeline
     reranker: Reranker
     retrieval_engine: RetrievalEngine
@@ -45,7 +44,7 @@ def build_rag_module(
     rerank_config: RerankConfig | None = None,
     agent_config: RagAgentConfig | None = None,
     parser_registry: ParserRegistry | None = None,
-    chunker: ChunkingStrategy | None = None,
+    chunker: MarkdownStructureChunker | None = None,
     reranker: Reranker | None = None,
     allow_remote_rerank: bool = True,
     backend_url: str = "",
@@ -58,7 +57,7 @@ def build_rag_module(
     rnk_cfg = rerank_config or RerankConfig()
 
     active_parsers = parser_registry or build_default_parser_registry()
-    active_chunker: ChunkingStrategy = chunker or MarkdownStructureChunker(
+    active_chunker = chunker or MarkdownStructureChunker(
         chunk_size_tokens=ing_cfg.chunk_size_tokens,
         chunk_overlap_tokens=ing_cfg.chunk_overlap_tokens,
     )
@@ -79,6 +78,8 @@ def build_rag_module(
         candidate_pool_size=rnk_cfg.candidate_pool_size,
         default_top_k=rnk_cfg.top_k,
         default_min_score=rnk_cfg.min_score,
+        min_chunks_per_scoped_doc=rnk_cfg.min_chunks_per_scoped_doc,
+        max_multi_doc_top_k=rnk_cfg.max_multi_doc_top_k,
     )
     active_lazy_indexer = lazy_indexer
     if active_lazy_indexer is None and (file_fetcher is not None or backend_url.strip()):
@@ -91,6 +92,8 @@ def build_rag_module(
             ingestion_pipeline=pipeline,
             knowledge_store=knowledge_store,
             file_fetcher=active_fetcher,
+            max_per_turn=ing_cfg.lazy_max_per_turn,
+            per_file_timeout_seconds=ing_cfg.lazy_per_file_timeout_seconds,
         )
     spec = build_rag_agent_spec(
         llm,

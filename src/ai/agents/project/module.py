@@ -8,8 +8,10 @@ import httpx
 
 from ai.agents.project.gateway.contracts import ProjectGateway
 from ai.agents.project.gateway.http import HttpProjectGateway
-from ai.agents.project.tools.contracts import ProjectToolRegistry
-from ai.agents.project.tools.registry import build_default_project_tool_registry
+from ai.agents.project.tools.contracts import (
+    ProjectToolRegistry,
+    build_default_project_tool_registry,
+)
 from ai.agents.project.workflow.contracts import ProjectAgentConfig
 from ai.agents.project.workflow.graph import build_project_agent_spec
 from ai.orchestrator.contracts import AgentSpec

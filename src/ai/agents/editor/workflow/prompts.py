@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-import json
 from collections.abc import Sequence
 from typing import Any
 
 from ai.orchestrator.citations import CITATION_INSTRUCTIONS
+from ai.shared.workflow.synthesize import format_peer_findings, format_tool_observations
 
 
 def build_planner_prompt(
@@ -116,13 +116,9 @@ def format_observations_block(
     if context_snapshot_text.strip():
         sections.append(context_snapshot_text.strip())
 
-    if peer_findings:
-        peer_lines: list[str] = ["## Findings from Peer Specialists"]
-        for finding in peer_findings:
-            agent = str(finding.get("agent") or "peer")
-            content = str(finding.get("content") or "").strip()
-            peer_lines.append(f"### From `{agent}`\n{content}")
-        sections.append("\n\n".join(peer_lines))
+    peer_block = format_peer_findings(peer_findings)
+    if peer_block:
+        sections.append(peer_block)
 
     if patches:
         patch_lines = ["## Verified Patch Proposals Ready for UI"]
@@ -138,12 +134,5 @@ def format_observations_block(
                 patch_lines.append(f"   Rationale: {rationale}")
         sections.append("\n".join(patch_lines))
 
-    if not observations:
-        sections.append("Tool observations: (none yet)")
-    else:
-        rendered = json.dumps(list(observations), ensure_ascii=False, indent=2)
-        if len(rendered) > 14_000:
-            rendered = rendered[-14_000:]
-        sections.append(f"Tool observations so far:\n{rendered}")
-
+    sections.append(format_tool_observations(observations))
     return "\n\n".join(sections)

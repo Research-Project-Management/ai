@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Awaitable, Callable
-from typing import Any
+from typing import Any, cast
 
-from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
 from pydantic import BaseModel
 
@@ -35,13 +35,12 @@ from ai.agents.project.workflow.prompts import (
     format_observations_block,
 )
 from ai.agents.project.workflow.state import ProjectState
-from ai.shared.contracts.run_control import RunUsage
 from ai.shared.llm.factory import ChatRunnable
-from ai.shared.llm.output import extract_text, strip_reasoning
 from ai.shared.workflow.events import LangGraphToolEvents, ToolEventPublisher
 from ai.shared.workflow.execute import run_tool_batch
 from ai.shared.workflow.gate import build_confirmation_payload, run_policy_gate
 from ai.shared.workflow.plan import run_plan_step
+from ai.shared.workflow.synthesize import format_conversation_tail, run_synthesize_step
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +75,17 @@ class ProjectWorkflowNodes:
         self._agent_config = agent_config
         self._events: ToolEventPublisher = event_publisher or LangGraphToolEvents("project_agent")
         self._catalog_text = tool_registry.format_catalog()
+        self._openai_tools = tool_registry.to_openai_tools()
+        self._planner_llm: ChatRunnable = llm
+        self._native_tools_bound = False
+        bind_fn = getattr(llm, "bind_tools", None)
+        if self._openai_tools and callable(bind_fn):
+            try:
+                self._planner_llm = cast(ChatRunnable, bind_fn(self._openai_tools))
+                self._native_tools_bound = True
+            except (NotImplementedError, TypeError):
+                self._planner_llm = llm
+                self._native_tools_bound = False
 
     def _build_scope(self, state: ProjectState) -> ProjectScope:
         return ProjectScope(
@@ -131,9 +141,11 @@ class ProjectWorkflowNodes:
                 if active_project is None:
                     active_project = await self._gateway.projects.get_project(scope, project_id)
                 project_id = active_project.id or project_id
-                states = await self._gateway.projects.list_workflow_states(scope, project_id)
-                members = await self._gateway.projects.list_members(scope, project_id, limit=100)
-                labels = await self._gateway.projects.list_labels(scope, project_id)
+                states, members, labels = await asyncio.gather(
+                    self._gateway.projects.list_workflow_states(scope, project_id),
+                    self._gateway.projects.list_members(scope, project_id, limit=100),
+                    self._gateway.projects.list_labels(scope, project_id),
+                )
             except (ProjectGatewayError, TimeoutError, OSError):
                 pass
 
@@ -170,17 +182,15 @@ class ProjectWorkflowNodes:
 
     async def plan_and_act(self, state: ProjectState, config: RunnableConfig) -> dict[str, Any]:
         query = str(state.get("query") or "")
-        tail = state.get("conversation_tail") or []
-        tail_block = "Recent conversation:\n" + "\n".join(tail) + "\n\n" if tail else ""
         next_step = int(state.get("step", 0)) + 1
         return await run_plan_step(
-            self._llm,
+            self._planner_llm,
             system_prompt=build_planner_prompt(
                 self._catalog_text,
                 step=next_step,
                 max_steps=self._agent_config.max_steps,
             ),
-            user_content=tail_block
+            user_content=format_conversation_tail(state.get("conversation_tail"))
             + format_observations_block(
                 query=query,
                 context_snapshot_text=str(state.get("context_snapshot_text") or ""),
@@ -191,6 +201,7 @@ class ProjectWorkflowNodes:
             step=next_step,
             prior_usage=state.get("usage"),
             max_calls=6,
+            native_tools_bound=self._native_tools_bound,
         )
 
     async def policy_gate(self, state: ProjectState, config: RunnableConfig) -> dict[str, Any]:
@@ -247,36 +258,22 @@ class ProjectWorkflowNodes:
     async def synthesize_response(
         self, state: ProjectState, config: RunnableConfig
     ) -> dict[str, Any]:
-        draft = str(state.get("draft_answer") or "").strip()
         widgets = state.get("widgets") or []
-        peer_findings = state.get("peer_findings") or []
-        observations = state.get("observations") or []
-
-        if draft and not widgets:
-            return {"final_answer": draft}
-
-        query = str(state.get("query") or "")
-        tail = state.get("conversation_tail") or []
-        tail_block = "Recent conversation:\n" + "\n".join(tail) + "\n\n" if tail else ""
-        user_content = tail_block + format_observations_block(
-            query=query,
-            context_snapshot_text=str(state.get("context_snapshot_text") or ""),
-            observations=observations,
-            peer_findings=peer_findings,
-        )
-
-        response = await self._llm.ainvoke(
-            [
-                SystemMessage(content=build_synthesizer_prompt(has_widgets=bool(widgets))),
-                HumanMessage(content=user_content),
-            ],
+        return await run_synthesize_step(
+            self._llm,
+            draft_answer=state.get("draft_answer"),
+            allow_draft_fast_path=not widgets,
+            system_prompt=build_synthesizer_prompt(has_widgets=bool(widgets)),
+            user_content=format_observations_block(
+                query=str(state.get("query") or ""),
+                context_snapshot_text=str(state.get("context_snapshot_text") or ""),
+                observations=state.get("observations") or (),
+                peer_findings=state.get("peer_findings") or (),
+            ),
+            conversation_tail=state.get("conversation_tail"),
+            prior_usage=state.get("usage"),
             config=config,
         )
-        prior_usage = state.get("usage") or RunUsage()
-        return {
-            "final_answer": strip_reasoning(extract_text(response.content)),
-            "usage": prior_usage.merge(RunUsage.from_message(response)),
-        }
 
 
 def build_project_nodes(

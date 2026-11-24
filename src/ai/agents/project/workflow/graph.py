@@ -8,8 +8,10 @@ from langchain_core.runnables import RunnableConfig
 from langgraph.graph.state import CompiledStateGraph
 
 from ai.agents.project.gateway.contracts import ProjectGateway
-from ai.agents.project.tools.contracts import ProjectToolRegistry
-from ai.agents.project.tools.registry import build_default_project_tool_registry
+from ai.agents.project.tools.contracts import (
+    ProjectToolRegistry,
+    build_default_project_tool_registry,
+)
 from ai.agents.project.workflow.contracts import ProjectAgentConfig
 from ai.agents.project.workflow.nodes import build_project_nodes
 from ai.agents.project.workflow.state import ProjectState

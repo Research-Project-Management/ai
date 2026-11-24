@@ -20,8 +20,7 @@ from ai.agents.rag.ingestion.contracts import UnsupportedDocumentFormatError
 from ai.agents.rag.ingestion.parsers import MarkdownTextParser, build_default_parser_registry
 from ai.agents.rag.ingestion.pipeline import IngestionPipeline
 from ai.agents.rag.retrieval.contracts import RankedPassage, RetrievalQuery
-from ai.agents.rag.retrieval.engine import RetrievalEngine
-from ai.agents.rag.retrieval.repacker import filter_and_repack
+from ai.agents.rag.retrieval.engine import RetrievalEngine, filter_and_repack
 from ai.agents.rag.retrieval.reranker import HttpCrossEncoderReranker, LexicalHybridReranker
 from ai.agents.rag.workflow.contracts import ABSTENTION_RESPONSE, RagAgentConfig
 from ai.agents.rag.workflow.graph import build_rag_subgraph

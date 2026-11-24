@@ -1,5 +1,7 @@
 """Internal LangGraph state definition for the `rag_agent` subgraph."""
 
+from typing import Literal
+
 from typing_extensions import TypedDict
 
 from ai.agents.rag.retrieval.contracts import RankedPassage
@@ -22,6 +24,7 @@ class RagState(TypedDict, total=False):
     ranked_desc: list[RankedPassage]
     total_candidates: int
     abstain: bool
+    next_route: Literal["retry", "answer"]
     usage: RunUsage
     final_answer: str
     citations: list[CitationItem]

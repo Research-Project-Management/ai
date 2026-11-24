@@ -133,8 +133,15 @@ class LexicalHybridReranker:
             else:
                 bigram_score = 0.0
 
+            has_lexical_match = (
+                token_recall > 0.0
+                or bigram_score > 0.0
+                or section_overlap > 0.0
+                or title_overlap > 0.0
+            )
+            prior_weight = 0.22 if (has_lexical_match or not q_set) else 0.03
             combined = (
-                0.22 * rank_prior
+                prior_weight * rank_prior
                 + 0.48 * token_recall
                 + 0.14 * bigram_score
                 + 0.12 * section_overlap

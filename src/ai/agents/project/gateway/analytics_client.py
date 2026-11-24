@@ -1,21 +1,19 @@
-"""Sub-client handling project & user analytics endpoints."""
+"""Sub-client handling project analytics endpoints."""
 
 from __future__ import annotations
-
-from typing import Any
 
 from ai.agents.project.gateway.contracts import (
     ProjectAnalytics,
     ProjectGatewayError,
     ProjectScope,
 )
-from ai.agents.project.gateway.transport import ProjectHttpTransport, encode_seg
+from ai.shared.gateway.transport import BackendTransport, encode_seg
 
 
 class AnalyticsClient:
-    """Adapter for `/api/v1/projects/:id/analytics` and `/api/v1/analytics/me/overview`."""
+    """Adapter for `/api/v1/projects/:id/analytics`."""
 
-    def __init__(self, transport: ProjectHttpTransport) -> None:
+    def __init__(self, transport: BackendTransport) -> None:
         self._transport = transport
 
     async def get_project_analytics(self, scope: ProjectScope, project_id: str) -> ProjectAnalytics:
@@ -63,13 +61,3 @@ class AnalyticsClient:
                 else []
             ),
         )
-
-    async def get_user_overview(self, scope: ProjectScope) -> dict[str, Any]:
-        del scope
-        raw = await self._transport.request("GET", "/api/v1/analytics/me/overview")
-        if isinstance(raw, dict):
-            stats = raw.get("stats")
-            if isinstance(stats, dict):
-                return stats
-            return raw
-        return {}

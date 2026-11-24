@@ -59,7 +59,7 @@ class HttpEditorGateway:
         if not clean:
             raise EditorGatewayError(
                 400,
-                "Active page `page_id` is required to access workspace files",
+                "Active page `page_id` is required to access page files",
             )
         return clean
 

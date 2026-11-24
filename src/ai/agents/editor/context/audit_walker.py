@@ -8,7 +8,11 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 
 from ai.agents.editor.context.audit_models import IncludeIssue
-from ai.agents.editor.context.latex_scanner import VERBATIM_ENVS, mask_environments
+from ai.agents.editor.context.latex_scanner import (
+    VERBATIM_ENVS,
+    mask_environments,
+    normalize_path,
+)
 from ai.agents.editor.context.preamble import extract_preamble_summary
 
 _DOC_CLASS_RE = re.compile(r"\\documentclass(?:\[[^\]]*\])?\{([^}]+)\}")
@@ -54,13 +58,6 @@ class WalkResult:
     total_words_approx: int = 0
 
 
-def _normalize_path(raw: str) -> str:
-    clean = raw.strip().replace("\\", "/").lstrip("/")
-    while clean.startswith("./"):
-        clean = clean[2:]
-    return posixpath.normpath(clean) if clean else ""
-
-
 def _resolve_include_target(
     parent_path: str,
     raw_target: str,
@@ -84,7 +81,7 @@ def _resolve_include_target(
             candidates.append(f"{joined}.tex")
 
     for cand in candidates:
-        norm = _normalize_path(cand)
+        norm = normalize_path(cand)
         if norm in known_paths:
             return norm
     return None
@@ -116,7 +113,7 @@ def prepare_sources(
     raw_contents: dict[str, str] = {}
 
     for raw_path, raw_text in files.items():
-        norm_path = _normalize_path(raw_path)
+        norm_path = normalize_path(raw_path)
         if not norm_path:
             continue
         lower = norm_path.lower()
@@ -139,7 +136,7 @@ def resolve_root_file(
     root_file_hint: str | None,
 ) -> tuple[str | None, bool]:
     """Resolve the entry `.tex` file and whether it declares `\\documentclass`."""
-    norm_hint = _normalize_path(root_file_hint) if root_file_hint else None
+    norm_hint = normalize_path(root_file_hint) if root_file_hint else None
     docclass_files = sorted(
         p for p in tex_paths if any(_DOC_CLASS_RE.search(ln) for ln in source_lines[p])
     )

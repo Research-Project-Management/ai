@@ -30,12 +30,7 @@ def build_rag_subgraph(
     nodes = build_rag_nodes(llm=llm, retrieval_engine=retrieval_engine, agent_config=cfg)
 
     def _route_after_eval(state: RagState) -> str:
-        ranked = state.get("ranked_desc") or []
-        if len(ranked) >= cfg.min_passages:
-            return "answer"
-        if state.get("attempt", 1) < cfg.max_attempts and not state.get("abstain", False):
-            return "retry"
-        return "answer"
+        return state.get("next_route", "answer")
 
     builder = StateGraph(RagState)
     builder.add_node("transform_query", nodes["transform_query"])
@@ -82,31 +77,13 @@ def build_rag_agent_spec(
             if str(item).strip()
         )
         attached = parse_attached_sources(context.get("attached_sources"))
-        lazy_indexed_count = 0
         lazy_report_artifacts: dict[str, Any] = {}
 
         if attached:
             if lazy_indexer is not None:
                 report = await lazy_indexer.ensure_indexed(space_id=space_id, sources=attached)
-                lazy_indexed_count = len(report.newly_indexed)
-                metadata_only_items = {
-                    s.item_id for s in attached if s.item_id and not s.effective_source_id
-                }
-                failed_ids = {f["source_id"] for f in report.failed if f.get("source_id")}
-                extra_fallbacks = tuple(
-                    doc_id
-                    for doc_id in raw_doc_ids
-                    if doc_id not in metadata_only_items
-                    and doc_id not in failed_ids
-                    and doc_id not in report.ready_source_ids
-                )
-                source_ids = (*report.ready_source_ids, *extra_fallbacks)
-                if report.skipped_metadata_only or report.failed or lazy_indexed_count:
-                    lazy_report_artifacts = {
-                        "lazy_indexed_count": lazy_indexed_count,
-                        "skipped_metadata_only": list(report.skipped_metadata_only),
-                        "lazy_index_failed": list(report.failed),
-                    }
+                source_ids = report.resolve_source_ids(attached, raw_doc_ids)
+                lazy_report_artifacts = report.to_artifacts()
             else:
                 source_ids = collect_rag_source_ids(attached, raw_doc_ids)
 
@@ -165,7 +142,7 @@ def build_rag_agent_spec(
         name="rag_agent",
         description=(
             "Searches and answers questions grounded in uploaded documents, PDFs, DOCX files, "
-            "and Markdown notes inside the current workspace with inline citations."
+            "and Markdown notes inside the current Space with inline citations."
         ),
         handler=_run_rag_agent,
         capabilities=("hybrid_search", "rerank", "crag", "grounded_citations"),

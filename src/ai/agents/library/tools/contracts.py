@@ -64,3 +64,18 @@ class LibraryToolRegistry(ToolRegistry[LibraryToolSpec]):
     """OCP registry of library tools used for planner formatting and policy gates."""
 
     label = "library"
+
+
+def build_default_tool_registry() -> LibraryToolRegistry:
+    """Assemble the default 11-tool registry for `library_agent`."""
+    from ai.agents.library.tools.destructive import build_destructive_tools
+    from ai.agents.library.tools.read import build_read_tools
+    from ai.agents.library.tools.write import build_write_tools
+
+    return LibraryToolRegistry(
+        (
+            *build_read_tools(),
+            *build_write_tools(),
+            *build_destructive_tools(),
+        )
+    )

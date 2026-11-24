@@ -1570,9 +1570,9 @@ async def test_editor_design_patterns_extensibility() -> None:
     from ai.agents.editor.patching.contracts import MatchStrategy
     from ai.agents.editor.patching.matcher import DEFAULT_ANCHOR_STRATEGIES, find_unique_anchor
     from ai.agents.editor.patching.validator import DEFAULT_VALIDATION_RULES, ValidationContext
-    from ai.agents.editor.tools.registry import build_default_editor_tool_registry
+    from ai.agents.editor.tools.contracts import build_default_editor_tool_registry
     from ai.agents.editor.workflow.contracts import EditorAgentConfig
-    from ai.agents.editor.workflow.events import EditorEventPublisher, NullEditorEvents
+    from ai.agents.editor.workflow.events import NullEditorEvents
     from ai.agents.editor.workflow.nodes import build_editor_nodes
 
     class _ForbidTodoRule:
@@ -1616,7 +1616,7 @@ async def test_editor_design_patterns_extensibility() -> None:
         == "Create Track Changes `delete` suggestion in `main.tex`"
     )
 
-    pub: EditorEventPublisher = NullEditorEvents()
+    pub = NullEditorEvents()
     gw = InMemoryFakeEditorGateway()
     nodes = build_editor_nodes(
         llm=_scripted_llm(["ok"]),
@@ -1683,8 +1683,10 @@ def test_preamble_order_validation_rejects_usepackage_before_documentclass() -> 
 async def test_http_editor_gateway_create_page_and_tool_without_open_page() -> None:
     import pytest
 
-    from ai.agents.editor.tools.contracts import EditorToolRuntime
-    from ai.agents.editor.tools.registry import build_default_editor_tool_registry
+    from ai.agents.editor.tools.contracts import (
+        EditorToolRuntime,
+        build_default_editor_tool_registry,
+    )
     from ai.agents.editor.tools.write import CreatePageArgs, handle_create_page
 
     captured: list[tuple[str, str, dict[str, Any] | None]] = []

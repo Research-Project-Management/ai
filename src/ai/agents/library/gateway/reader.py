@@ -5,7 +5,7 @@ from collections.abc import Sequence
 from typing import Any, Final, Literal
 from urllib.parse import quote
 
-from ai.agents.library.gateway.client_base import LibraryClientBase
+from ai.agents.library.gateway.client_base import library_route
 from ai.agents.library.gateway.contracts import (
     ItemDetail,
     LibraryGatewayError,
@@ -25,11 +25,11 @@ _EXPORT_FORMATS: Final[frozenset[str]] = frozenset(
 )
 
 
-class LibraryReader(LibraryClientBase):
+class LibraryReader:
     """`LibraryReadPort` over the Flux Backend Library REST API."""
 
     def __init__(self, transport: BackendTransport, *, max_items_per_call: int = 20) -> None:
-        super().__init__(transport)
+        self._transport = transport
         self._max_items_per_call = max_items_per_call
 
     async def search_items(
@@ -58,9 +58,11 @@ class LibraryReader(LibraryClientBase):
         }
         if clean_query:
             params["q"] = clean_query
-            raw = await self._request("GET", self._route(scope, "search"), params=params)
+            raw = await self._transport.request(
+                "GET", library_route(scope, "search"), params=params
+            )
         else:
-            raw = await self._request("GET", self._route(scope, "items"), params=params)
+            raw = await self._transport.request("GET", library_route(scope, "items"), params=params)
 
         raw_items = raw.get("items", []) if isinstance(raw, dict) else raw
         items = [
@@ -79,9 +81,9 @@ class LibraryReader(LibraryClientBase):
 
     async def get_overview(self, scope: LibraryScope) -> LibraryOverview:
         counts_raw, tree_raw, tags_raw = await asyncio.gather(
-            self._request("GET", self._route(scope, "items/counts")),
-            self._request("GET", self._route(scope, "collections/tree")),
-            self._request("GET", self._route(scope, "tags")),
+            self._transport.request("GET", library_route(scope, "items/counts")),
+            self._transport.request("GET", library_route(scope, "collections/tree")),
+            self._transport.request("GET", library_route(scope, "tags")),
         )
         counts = counts_raw if isinstance(counts_raw, dict) else {}
         tree_list = (
@@ -116,7 +118,7 @@ class LibraryReader(LibraryClientBase):
         include_relations: bool = True,
     ) -> ItemDetail:
         enc_id = quote(item_id.strip(), safe="")
-        item_raw = await self._request("GET", self._route(scope, f"items/{enc_id}"))
+        item_raw = await self._transport.request("GET", library_route(scope, f"items/{enc_id}"))
         if not isinstance(item_raw, dict):
             raise LibraryGatewayError(502, "Unexpected item response format from Backend")
 
@@ -126,7 +128,9 @@ class LibraryReader(LibraryClientBase):
 
         async def _safe_get(suffix: str, params: dict[str, Any] | None = None) -> Any:
             try:
-                return await self._request("GET", self._route(scope, suffix), params=params)
+                return await self._transport.request(
+                    "GET", library_route(scope, suffix), params=params
+                )
             except LibraryGatewayError:
                 return None
 
@@ -196,11 +200,17 @@ class LibraryReader(LibraryClientBase):
     ) -> dict[str, Any]:
         tasks: dict[str, Any] = {}
         if check in ("all", "duplicates"):
-            tasks["duplicates"] = self._request("GET", self._route(scope, "curation/duplicates"))
+            tasks["duplicates"] = self._transport.request(
+                "GET", library_route(scope, "curation/duplicates")
+            )
         if check in ("all", "quality"):
-            tasks["quality"] = self._request("GET", self._route(scope, "curation/quality"))
+            tasks["quality"] = self._transport.request(
+                "GET", library_route(scope, "curation/quality")
+            )
         if check in ("all", "retractions"):
-            tasks["retractions"] = self._request("GET", self._route(scope, "retraction/items"))
+            tasks["retractions"] = self._transport.request(
+                "GET", library_route(scope, "retraction/items")
+            )
 
         keys = list(tasks.keys())
         values = await asyncio.gather(*(tasks[k] for k in keys))
@@ -230,15 +240,15 @@ class LibraryReader(LibraryClientBase):
 
         if fmt in _EXPORT_FORMATS:
             if clean_ids:
-                raw = await self._request(
+                raw = await self._transport.request(
                     "POST",
-                    self._route(scope, "exports"),
+                    library_route(scope, "exports"),
                     json_body={"format": fmt, "itemIds": clean_ids},
                 )
             else:
-                raw = await self._request(
+                raw = await self._transport.request(
                     "GET",
-                    self._route(scope, "exports"),
+                    library_route(scope, "exports"),
                     params={"format": fmt},
                 )
             if isinstance(raw, dict):
@@ -255,9 +265,9 @@ class LibraryReader(LibraryClientBase):
                 400,
                 "cite_items requires item_ids when formatting styles (or pass export_format for bulk export)",
             )
-        raw = await self._request(
+        raw = await self._transport.request(
             "POST",
-            self._route(scope, "citation/batch-items"),
+            library_route(scope, "citation/batch-items"),
             json_body={"itemIds": clean_ids, "style": style.strip() or "apa-7th"},
         )
         return raw if isinstance(raw, dict) else {"citations": raw}

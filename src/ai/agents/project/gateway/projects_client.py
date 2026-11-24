@@ -15,11 +15,11 @@ from ai.agents.project.gateway.contracts import (
     WorkflowState,
 )
 from ai.agents.project.gateway.transport import (
-    ProjectHttpTransport,
     as_dict,
     encode_seg,
     unwrap_nested_dict,
 )
+from ai.shared.gateway.transport import BackendTransport
 
 
 def _parse_project(item: dict[str, Any]) -> ProjectSummary:
@@ -111,7 +111,7 @@ def _parse_activity(item: dict[str, Any]) -> ActivityEntry:
 class ProjectsClient:
     """Adapter for `/api/v1/projects/...` and `/api/.../activity/feed`."""
 
-    def __init__(self, transport: ProjectHttpTransport) -> None:
+    def __init__(self, transport: BackendTransport) -> None:
         self._transport = transport
 
     async def list_projects(

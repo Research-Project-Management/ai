@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Protocol
-
 from langchain_core.runnables import RunnableConfig
 
 from ai.agents.editor.patching.contracts import EditorPatchProposal
@@ -11,19 +9,7 @@ from ai.shared.workflow.events import (
     PATCH_PREVIEW,
     LangGraphToolEvents,
     NullToolEvents,
-    ToolEventPublisher,
 )
-
-
-class EditorEventPublisher(ToolEventPublisher, Protocol):
-    """Port for tool telemetry and patch preview notifications."""
-
-    async def emit_patch_preview(
-        self,
-        patch: EditorPatchProposal,
-        total_patches: int,
-        config: RunnableConfig,
-    ) -> None: ...
 
 
 class LangGraphEditorEvents(LangGraphToolEvents):

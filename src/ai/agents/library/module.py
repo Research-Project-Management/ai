@@ -8,8 +8,7 @@ import httpx
 
 from ai.agents.library.gateway.contracts import LibraryGateway
 from ai.agents.library.gateway.http import HttpLibraryGateway
-from ai.agents.library.tools.contracts import LibraryToolRegistry
-from ai.agents.library.tools.registry import build_default_tool_registry
+from ai.agents.library.tools.contracts import LibraryToolRegistry, build_default_tool_registry
 from ai.agents.library.workflow.contracts import LibraryAgentConfig
 from ai.agents.library.workflow.graph import build_library_agent_spec
 from ai.orchestrator.contracts import AgentSpec

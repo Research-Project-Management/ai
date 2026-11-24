@@ -152,6 +152,7 @@ class MarkdownStructureChunker:
         self._chunk_size = chunk_size_tokens
         self._overlap = chunk_overlap_tokens
         self._encoding = tiktoken.get_encoding(encoding_name)
+        self._sep_tokens = self.count_tokens("\n\n")
 
     def count_tokens(self, text: str) -> int:
         """Count exact tokenizer tokens without tripping on special marker strings."""
@@ -172,9 +173,15 @@ class MarkdownStructureChunker:
                 break
         return pieces
 
-    def _split_oversize_table(self, table_text: str) -> list[str]:
+    def _split_oversize_table(
+        self,
+        table_text: str,
+        *,
+        total_tokens: int | None = None,
+    ) -> list[str]:
         rows = [row for row in table_text.splitlines() if row.strip()]
-        if len(rows) <= 3 or self.count_tokens(table_text) <= self._chunk_size * 2:
+        table_tokens = self.count_tokens(table_text) if total_tokens is None else total_tokens
+        if len(rows) <= 3 or table_tokens <= self._chunk_size * 2:
             return [table_text]
 
         header_rows = rows[:2] if "---" in rows[1] else rows[:1]
@@ -217,15 +224,19 @@ class MarkdownStructureChunker:
 
         raw_chunks: list[tuple[int | None, str, str]] = []
         buf_parts: list[str] = []
+        buf_part_tokens: list[int] = []
+        buf_tokens = 0
         buf_page: int | None = None
         buf_section = ""
 
         def flush() -> None:
-            nonlocal buf_parts, buf_page, buf_section
+            nonlocal buf_parts, buf_part_tokens, buf_tokens, buf_page, buf_section
             body = "\n\n".join(part for part in buf_parts if part.strip()).strip()
             if body:
                 raw_chunks.append((buf_page, buf_section, body))
             buf_parts = []
+            buf_part_tokens = []
+            buf_tokens = 0
             buf_page = None
             buf_section = ""
 
@@ -236,21 +247,20 @@ class MarkdownStructureChunker:
             if buf_parts and (buf_page != block.page_number or buf_section != block.section):
                 flush()
 
+            block_tokens = self.count_tokens(block.text)
+            projected_tokens = buf_tokens + (self._sep_tokens if buf_parts else 0) + block_tokens
+
             if block.kind == "table":
-                candidate = "\n\n".join([*buf_parts, block.text]) if buf_parts else block.text
-                if buf_parts and self.count_tokens(candidate) > self._chunk_size:
+                if buf_parts and projected_tokens > self._chunk_size:
                     flush()
-                table_parts = self._split_oversize_table(block.text)
-                if len(table_parts) > 1 or self.count_tokens(block.text) > self._chunk_size:
+                table_parts = self._split_oversize_table(block.text, total_tokens=block_tokens)
+                if len(table_parts) > 1 or block_tokens > self._chunk_size:
                     flush()
                     for part in table_parts:
                         raw_chunks.append((block.page_number, block.section, part))
                     continue
 
-            if (
-                block.kind in {"prose", "fence"}
-                and self.count_tokens(block.text) > self._chunk_size
-            ):
+            if block.kind in {"prose", "fence"} and block_tokens > self._chunk_size:
                 flush()
                 if block.kind == "fence":
                     raw_chunks.append((block.page_number, block.section, block.text))
@@ -259,19 +269,25 @@ class MarkdownStructureChunker:
                         raw_chunks.append((block.page_number, block.section, part))
                 continue
 
-            candidate = "\n\n".join([*buf_parts, block.text]) if buf_parts else block.text
-            if buf_parts and self.count_tokens(candidate) > self._chunk_size:
+            if buf_parts and projected_tokens > self._chunk_size:
                 overlap_tail = buf_parts[-1] if buf_parts[-1].startswith("#") else ""
+                overlap_tokens = buf_part_tokens[-1] if overlap_tail else 0
                 flush()
                 if overlap_tail and block.kind != "heading":
                     buf_parts = [overlap_tail]
+                    buf_part_tokens = [overlap_tokens]
+                    buf_tokens = overlap_tokens
                     buf_page = block.page_number
                     buf_section = block.section
 
-            if not buf_parts:
+            if buf_parts:
+                buf_tokens += self._sep_tokens
+            else:
                 buf_page = block.page_number
                 buf_section = block.section
             buf_parts.append(block.text)
+            buf_part_tokens.append(block_tokens)
+            buf_tokens += block_tokens
 
         flush()
 

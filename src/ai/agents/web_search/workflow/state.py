@@ -1,5 +1,7 @@
 """LangGraph state definition isolated inside the `web_search_agent` subgraph."""
 
+from typing import Literal
+
 from typing_extensions import TypedDict
 
 from ai.agents.web_search.fetch.contracts import ClientSourcePayload
@@ -30,6 +32,7 @@ class WebSearchState(TypedDict, total=False):
     ranked_desc: list[RankedWebEvidence]
     blocked_sources: list[BlockedSourceReport]
     abstain: bool
+    next_route: Literal["retry", "answer"]
     usage: RunUsage
     final_answer: str
     citations: list[CitationItem]

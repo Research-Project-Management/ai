@@ -9,8 +9,10 @@ from langchain_core.runnables import RunnableConfig
 from langgraph.graph.state import CompiledStateGraph
 
 from ai.agents.editor.gateway.contracts import EditorGateway
-from ai.agents.editor.tools.contracts import EditorToolRegistry
-from ai.agents.editor.tools.registry import build_default_editor_tool_registry
+from ai.agents.editor.tools.contracts import (
+    EditorToolRegistry,
+    build_default_editor_tool_registry,
+)
 from ai.agents.editor.workflow.contracts import EditorAgentConfig
 from ai.agents.editor.workflow.nodes import build_editor_nodes
 from ai.agents.editor.workflow.state import EditorState

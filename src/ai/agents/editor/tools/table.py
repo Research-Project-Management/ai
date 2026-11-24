@@ -15,8 +15,6 @@ from ai.agents.editor.tools.contracts import (
     EditorToolSpec,
 )
 from ai.agents.editor.tools.file_ops import resolve_and_cache_file
-from ai.shared.context.contracts import EntityDomain, GraphNode, RelationType
-from ai.shared.context.facade import ResearchContextFacade
 from ai.shared.github.client import HttpGitHubArtifactClient
 from ai.shared.github.contracts import (
     GitHubArtifactContent,
@@ -121,40 +119,6 @@ def _choose_anchor(content: str, args: InsertExperimentTableArgs) -> tuple[str, 
     return (last_lines[-1] if last_lines else ""), "insert_after"
 
 
-def _record_provenance(
-    facade: ResearchContextFacade,
-    *,
-    space_id: str,
-    file_path: str,
-    args: InsertExperimentTableArgs,
-    artifact: GitHubArtifactContent,
-) -> None:
-    table_node = GraphNode(
-        id=f"page:{space_id}#{args.label}",
-        domain=EntityDomain.PAGE,
-        label=args.caption,
-        attributes={"file_path": file_path, "label": args.label, "has_benchmark": True},
-    )
-    artifact_node = GraphNode(
-        id=f"github:{artifact.repo}@{artifact.commit_sha}:{artifact.path}",
-        domain=EntityDomain.EXPERIMENT,
-        label=f"{artifact.repo}/{artifact.path}",
-        attributes={
-            "repo": artifact.repo,
-            "commit_sha": artifact.commit_sha,
-            "url": artifact.url,
-        },
-    )
-    facade.register_node(table_node)
-    facade.register_node(artifact_node)
-    facade.link_entities(
-        src_id=artifact_node.id,
-        dst_id=table_node.id,
-        relation=RelationType.PROVES,
-        metadata={"path": artifact.path},
-    )
-
-
 def _failure(error: str) -> EditorToolResult:
     return EditorToolResult(tool="insert_experiment_table", status="error", error=error)
 
@@ -164,7 +128,6 @@ async def handle_insert_experiment_table(
     args: InsertExperimentTableArgs,
     *,
     artifact_client: GitHubArtifactGateway | None = None,
-    context_facade: ResearchContextFacade | None = None,
 ) -> EditorToolResult:
     """Fetch experiment data from GitHub, synthesize LaTeX booktabs table, and propose patch."""
     if len(runtime.patches) >= runtime.max_patches:
@@ -210,14 +173,6 @@ async def handle_insert_experiment_table(
         file_id=cached.file_id, file_path=cached.file_path, content=outcome.patched_content
     )
     runtime.patches.append(outcome.patch)
-    if context_facade is not None:
-        _record_provenance(
-            context_facade,
-            space_id=runtime.scope.space_id,
-            file_path=cached.file_path,
-            args=args,
-            artifact=artifact,
-        )
 
     artifact_info = {
         "repo": artifact.repo,
@@ -246,16 +201,11 @@ async def handle_insert_experiment_table(
 def build_table_tools(
     *,
     artifact_client: GitHubArtifactGateway | None = None,
-    context_facade: ResearchContextFacade | None = None,
 ) -> tuple[EditorToolSpec, ...]:
     """Assemble table tools for the Editor Agent."""
     handler = (
-        partial(
-            handle_insert_experiment_table,
-            artifact_client=artifact_client,
-            context_facade=context_facade,
-        )
-        if artifact_client is not None or context_facade is not None
+        partial(handle_insert_experiment_table, artifact_client=artifact_client)
+        if artifact_client is not None
         else handle_insert_experiment_table
     )
     return (

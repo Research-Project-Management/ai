@@ -2,16 +2,17 @@
 
 from __future__ import annotations
 
-import posixpath
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from ai.agents.editor.context.latex_scanner import normalize_path
 from ai.agents.editor.gateway.contracts import EditorGateway, EditorScope
 from ai.agents.editor.patching.contracts import EditorPatchProposal
 from ai.orchestrator.contracts import CitationItem
+from ai.shared.github.contracts import GitHubArtifactGateway
 from ai.shared.workflow.registry import ToolRegistry
 
 EditorRiskTier = Literal["read", "propose", "write"]
@@ -25,13 +26,6 @@ class CachedFile(BaseModel):
     file_id: str | None = None
     file_path: str
     content: str = ""
-
-
-def _normalize_path(path: str | None) -> str:
-    clean = (path or "").strip().replace("\\", "/").lstrip("/")
-    while clean.startswith("./"):
-        clean = clean[2:]
-    return posixpath.normpath(clean) if clean else ""
 
 
 @dataclass
@@ -53,7 +47,7 @@ class EditorToolRuntime:
         file_path: str | None = None,
     ) -> CachedFile | None:
         clean_id = (file_id or "").strip()
-        clean_path = _normalize_path(file_path)
+        clean_path = normalize_path(file_path)
 
         if clean_id:
             for cached in self.file_cache.values():
@@ -65,8 +59,8 @@ class EditorToolRuntime:
                 return self.file_cache[clean_path]
             for key, cached in self.file_cache.items():
                 if (
-                    _normalize_path(key) == clean_path
-                    or _normalize_path(cached.file_path) == clean_path
+                    normalize_path(key) == clean_path
+                    or normalize_path(cached.file_path) == clean_path
                 ):
                     return cached
             # Unique basename fallback (e.g. "intro.tex" -> "sections/intro.tex")
@@ -74,7 +68,7 @@ class EditorToolRuntime:
             matches = [
                 cached
                 for cached in self.file_cache.values()
-                if _normalize_path(cached.file_path).rsplit("/", 1)[-1] == basename
+                if normalize_path(cached.file_path).rsplit("/", 1)[-1] == basename
             ]
             if len(matches) == 1:
                 return matches[0]
@@ -87,7 +81,7 @@ class EditorToolRuntime:
         file_path: str,
         content: str,
     ) -> CachedFile:
-        clean_path = _normalize_path(file_path) or "document.tex"
+        clean_path = normalize_path(file_path) or "document.tex"
         existing = self.get_cached_file(file_id=file_id, file_path=clean_path)
         resolved_id = (file_id or "").strip() or (existing.file_id if existing else None)
         entry = CachedFile(file_id=resolved_id, file_path=clean_path, content=content)
@@ -132,3 +126,25 @@ class EditorToolRegistry(ToolRegistry[EditorToolSpec]):
     """OCP registry of editor tools used for planner formatting and policy gates."""
 
     label = "editor"
+
+
+def build_default_editor_tool_registry(
+    *,
+    artifact_client: GitHubArtifactGateway | None = None,
+) -> EditorToolRegistry:
+    """Assemble File, Analysis, Propose-Edit, Table, and HITL-Write tools into an OCP registry."""
+    from ai.agents.editor.tools.analysis import build_analysis_tools
+    from ai.agents.editor.tools.file_ops import build_file_tools
+    from ai.agents.editor.tools.patch import build_patch_tools
+    from ai.agents.editor.tools.table import build_table_tools
+    from ai.agents.editor.tools.write import build_write_tools
+
+    return EditorToolRegistry(
+        [
+            *build_file_tools(),
+            *build_analysis_tools(),
+            *build_patch_tools(),
+            *build_table_tools(artifact_client=artifact_client),
+            *build_write_tools(),
+        ]
+    )

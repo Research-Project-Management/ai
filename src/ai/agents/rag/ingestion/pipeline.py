@@ -2,8 +2,8 @@
 
 import asyncio
 
+from ai.agents.rag.ingestion.chunker import MarkdownStructureChunker
 from ai.agents.rag.ingestion.contracts import (
-    ChunkingStrategy,
     IngestDocumentRequest,
     IngestResult,
     ParsedDocument,
@@ -24,7 +24,7 @@ class IngestionPipeline:
         self,
         *,
         parser_registry: ParserRegistry,
-        chunker: ChunkingStrategy,
+        chunker: MarkdownStructureChunker,
         knowledge_store: KnowledgeStore,
         max_file_bytes: int = 50 * 1024 * 1024,
     ) -> None:
@@ -76,6 +76,10 @@ class IngestionPipeline:
         if not chunks:
             raise ValueError("Document yielded no extractable text chunks")
 
+        doc_metadata = dict(request.metadata)
+        if pages_parsed > 0:
+            doc_metadata["total_pages"] = pages_parsed
+
         doc = KnowledgeDocumentInput(
             space_id=request.space_id,
             source_type=request.source_type,
@@ -83,7 +87,7 @@ class IngestionPipeline:
             title=resolved_title,
             url=request.url,
             chunks=tuple(chunks),
-            metadata=request.metadata,
+            metadata=doc_metadata,
         )
         chunks_indexed = await self._knowledge_store.upsert(doc)
         return IngestResult(

@@ -25,6 +25,7 @@ from ai.agents.web_search.ranking.triage import (
 from ai.agents.web_search.search.contracts import SearchHit, SearchQuery
 from ai.agents.web_search.search.registry import SearchProviderRegistry
 from ai.agents.web_search.workflow.contracts import (
+    VALID_MODES,
     WEB_ABSTENTION_RESPONSE,
     SearchMode,
     SearchPlan,
@@ -41,8 +42,6 @@ from ai.shared.contracts.run_control import RunUsage
 from ai.shared.llm.factory import ChatRunnable
 from ai.shared.llm.nostream import with_nostream
 from ai.shared.llm.output import extract_text, parse_json_object, strip_reasoning
-
-_VALID_MODES: frozenset[str] = frozenset({"direct_url", "scholar", "web", "hybrid"})
 
 
 def _parse_search_plan(
@@ -70,7 +69,7 @@ def _parse_search_plan(
     raw_mode = str(payload.get("mode") or default_mode).strip().lower()
     if mode_override is not None:
         resolved_mode: SearchMode = mode_override
-    elif raw_mode in _VALID_MODES:
+    elif raw_mode in VALID_MODES:
         resolved_mode = cast(SearchMode, raw_mode)
     else:
         resolved_mode = default_mode
@@ -294,15 +293,15 @@ class WebSearchNodes:
         """Decide whether curated evidence satisfies coverage threshold or warrants retry."""
         ranked = state.get("ranked_desc") or []
         if len(ranked) >= self._cfg.min_evidence_count:
-            return {"abstain": False}
+            return {"abstain": False, "next_route": "answer"}
 
         blocked = state.get("blocked_sources") or []
         if blocked and all(item.reason in TERMINAL_SECURITY_BLOCKS for item in blocked):
-            return {"abstain": True}
+            return {"abstain": True, "next_route": "answer"}
 
         if int(state.get("round_index", 1)) < self._cfg.max_rounds:
-            return {"abstain": False}
-        return {"abstain": True}
+            return {"abstain": False, "next_route": "retry"}
+        return {"abstain": True, "next_route": "answer"}
 
     async def synthesize_answer(
         self, state: WebSearchState, config: RunnableConfig

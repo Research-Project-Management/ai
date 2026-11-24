@@ -26,7 +26,7 @@ from ai.agents.library.gateway.contracts import (
 )
 from ai.agents.library.gateway.http import HttpLibraryGateway
 from ai.agents.library.module import build_library_module
-from ai.agents.library.tools.registry import build_default_tool_registry
+from ai.agents.library.tools.contracts import build_default_tool_registry
 from ai.agents.library.workflow.contracts import LibraryAgentConfig
 from ai.main import create_app
 from ai.shared.config.database import DatabaseConfig, PostgresConfig, QdrantConfig, RedisConfig
@@ -572,7 +572,7 @@ def test_library_agent_safe_write_runs_directly_under_destructive_policy() -> No
     with TestClient(app) as client:
         res = client.post(
             "/chat/sync",
-            headers={"X-Internal-Key": "test-key"},
+            headers={"X-Internal-Key": "test-key", "Authorization": "Bearer user-tok-safe-write"},
             json={
                 "messages": [{"role": "user", "content": "Thêm arXiv 1706.03762 và lưu note"}],
                 "space_id": "s1",
@@ -733,7 +733,7 @@ def test_library_agent_readonly_policy_blocks_writes() -> None:
     with TestClient(app) as client:
         res = client.post(
             "/chat/sync",
-            headers={"X-Internal-Key": "test-key"},
+            headers={"X-Internal-Key": "test-key", "Authorization": "Bearer user-tok-safe-write"},
             json={
                 "messages": [{"role": "user", "content": "Thêm bài DOI 10.1000/1"}],
                 "space_id": "s1",

@@ -58,7 +58,20 @@ def format_evidence_block(
     blocks: list[str] = []
     for passage in passages_repacked:
         idx = index_by_key[(passage.source_type, passage.source_id, passage.chunk_index)]
-        page_label = f" | Page {passage.page}" if passage.page is not None else ""
+        raw_total = passage.metadata.get("total_pages")
+        total_pages = (
+            raw_total
+            if isinstance(raw_total, int) and not isinstance(raw_total, bool) and raw_total > 0
+            else None
+        )
+        if passage.page is not None and total_pages is not None:
+            page_label = f" | Page {passage.page}/{total_pages}"
+        elif passage.page is not None:
+            page_label = f" | Page {passage.page}"
+        elif total_pages is not None:
+            page_label = f" | Total Pages: {total_pages}"
+        else:
+            page_label = ""
         title_label = passage.title or passage.source_id
         blocks.append(
             f"{format_evidence_tag(idx)} Source: {title_label}{page_label}\n{passage.content.strip()}"

@@ -9,6 +9,7 @@ WEB_ABSTENTION_RESPONSE: Final[str] = (
 )
 
 SearchMode = Literal["direct_url", "scholar", "web", "hybrid"]
+VALID_MODES: Final[frozenset[str]] = frozenset({"direct_url", "scholar", "web", "hybrid"})
 
 
 class SearchPlan(BaseModel):

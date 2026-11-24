@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import posixpath
 import re
 
 VERBATIM_ENVS: frozenset[str] = frozenset({"verbatim", "lstlisting", "minted", "comment"})
@@ -17,6 +18,14 @@ _REF_USE_RE = re.compile(r"\\(?:eq|auto|c|C|page|name)?ref\*?\{([^}]+)\}")
 def normalize_newlines(text: str) -> str:
     """Normalize CRLF/CR line endings to LF."""
     return text.replace("\r\n", "\n").replace("\r", "\n")
+
+
+def normalize_path(path: str | None) -> str:
+    """Normalize a LaTeX workspace file path to a clean relative POSIX path."""
+    clean = (path or "").strip().replace("\\", "/").lstrip("/")
+    while clean.startswith("./"):
+        clean = clean[2:]
+    return posixpath.normpath(clean) if clean else ""
 
 
 def strip_latex_comments(text: str) -> str:
