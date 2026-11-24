@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Any, Literal
 
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -11,7 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from ai.shared.contracts.run_control import RunUsage
 from ai.shared.llm.factory import ChatRunnable
 from ai.shared.llm.nostream import with_nostream
-from ai.shared.llm.output import extract_text, parse_json_object
+from ai.shared.llm.output import extract_text, parse_json_object, strip_reasoning
 
 
 class PlannedCall(BaseModel):
@@ -68,6 +69,27 @@ def parse_action_plan(raw_text: str, *, max_calls: int) -> ActionPlan:
     return ActionPlan(action="call_tools", tool_calls=tuple(calls), reasoning=reasoning)
 
 
+def _extract_native_tool_calls(response: Any, *, max_calls: int) -> tuple[PlannedCall, ...]:
+    """Extract LangChain native `AIMessage.tool_calls` into `PlannedCall` items."""
+    raw_calls = getattr(response, "tool_calls", None)
+    if not isinstance(raw_calls, list) or not raw_calls:
+        return ()
+    calls: list[PlannedCall] = []
+    for item in raw_calls[:max_calls]:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "").strip()
+        args = item.get("args")
+        if name:
+            calls.append(
+                PlannedCall(
+                    tool=name,
+                    args=dict(args) if isinstance(args, dict) else {},
+                )
+            )
+    return tuple(calls)
+
+
 async def run_plan_step(
     llm: ChatRunnable,
     *,
@@ -77,29 +99,63 @@ async def run_plan_step(
     step: int,
     prior_usage: RunUsage | None,
     max_calls: int,
+    tools: Sequence[dict[str, Any]] | None = None,
+    native_tools_bound: bool = False,
 ) -> dict[str, Any]:
-    """Run one planner LLM call and return the state delta shared by every tool-using agent."""
-    response = await llm.ainvoke(
+    """Run one planner LLM call using native `bind_tools` when available, with JSON fallback."""
+    bind_fn = getattr(llm, "bind_tools", None)
+    used_native_tools = native_tools_bound
+    runnable: Any = llm
+    if tools and callable(bind_fn):
+        try:
+            runnable = bind_fn(tools)
+            used_native_tools = True
+        except (NotImplementedError, TypeError):
+            runnable = llm
+            used_native_tools = native_tools_bound
+
+    response = await runnable.ainvoke(
         [SystemMessage(content=system_prompt), HumanMessage(content=user_content)],
         config=with_nostream(config),
     )
-    plan = parse_action_plan(extract_text(response.content), max_calls=max_calls)
     usage = (prior_usage or RunUsage()).merge(RunUsage.from_message(response))
 
-    if plan.action == "respond" or not plan.tool_calls:
+    native_calls = _extract_native_tool_calls(response, max_calls=max_calls)
+    if native_calls:
         return {
             "step": step,
-            "pending_calls": [],
+            "pending_calls": [c.model_dump() for c in native_calls],
             "approved_calls": [],
-            "draft_answer": plan.answer,
-            "done": True,
+            "draft_answer": "",
+            "done": False,
             "usage": usage,
         }
+
+    raw_text = extract_text(response.content)
+    plan = parse_action_plan(raw_text, max_calls=max_calls)
+    if plan.action == "call_tools" and plan.tool_calls:
+        return {
+            "step": step,
+            "pending_calls": [c.model_dump() for c in plan.tool_calls],
+            "approved_calls": [],
+            "draft_answer": "",
+            "done": False,
+            "usage": usage,
+        }
+
+    draft_answer = plan.answer
+    if not draft_answer and used_native_tools:
+        # When native tool-calling finishes without invoking a tool, the model's
+        # plain-text reply IS the final answer (cuts simple read turns from 3 -> 2 LLM calls).
+        cleaned = strip_reasoning(raw_text).strip()
+        if cleaned and parse_json_object(cleaned) is None:
+            draft_answer = cleaned
+
     return {
         "step": step,
-        "pending_calls": [c.model_dump() for c in plan.tool_calls],
+        "pending_calls": [],
         "approved_calls": [],
-        "draft_answer": "",
-        "done": False,
+        "draft_answer": draft_answer,
+        "done": True,
         "usage": usage,
     }

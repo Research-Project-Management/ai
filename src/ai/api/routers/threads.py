@@ -9,6 +9,8 @@ from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph.state import CompiledStateGraph
 
 from ai.api.dependencies import (
+    bind_run_context,
+    extract_bearer_token,
     get_cancel_registry,
     get_checkpointer,
     get_mutation_journal,
@@ -30,13 +32,12 @@ from ai.orchestrator.rewind import (
     list_thread_checkpoints,
     rewind_thread_state,
 )
-from ai.shared.contracts.auth import bind_delegation_token
 from ai.shared.contracts.run_control import RunCancellationRegistry
 from ai.shared.gateway.transport import BackendTransport
 from ai.shared.resilience.mutations import (
+    JournalStore,
     MutationRevertError,
     RevertStepResult,
-    TurnMutationJournal,
     revert_turn_mutations,
 )
 
@@ -154,14 +155,13 @@ def _build_revert_transport(raw_request: Request, *, service: str) -> BackendTra
 async def revert_turn(
     trace_id: str,
     raw_request: Request,
-    journal: Annotated[TurnMutationJournal, Depends(get_mutation_journal)],
+    journal: Annotated[JournalStore, Depends(get_mutation_journal)],
     space_id: Annotated[str, Query(min_length=1)],
     body: Annotated[TurnRevertRequest | None, Body()] = None,
 ) -> TurnRevertResponse:
     """Execute LIFO compensating HTTP actions for mutations recorded in `trace_id`."""
     transport = _build_revert_transport(raw_request, service="Revert")
-    auth_header = raw_request.headers.get("authorization", "")
-    with bind_delegation_token(auth_header):
+    with bind_run_context(delegation_token=extract_bearer_token(raw_request)):
         results = await revert_turn_mutations(
             journal,
             space_id=space_id,
@@ -207,7 +207,7 @@ async def rewind_thread(
     raw_request: Request,
     body: ThreadRewindRequest,
     checkpointer: Annotated[BaseCheckpointSaver, Depends(get_checkpointer)],
-    journal: Annotated[TurnMutationJournal, Depends(get_mutation_journal)],
+    journal: Annotated[JournalStore, Depends(get_mutation_journal)],
     space_id: Annotated[str, Query(min_length=1)],
 ) -> ThreadRewindResponse:
     """Rewind LangGraph conversation head to a past checkpoint and optionally undo turn mutations."""
@@ -237,8 +237,7 @@ async def rewind_thread(
     trace_ids = [tid.strip() for tid in body.revert_trace_ids if tid and tid.strip()]
     if trace_ids:
         transport = _build_revert_transport(raw_request, service="Rewind")
-        auth_header = raw_request.headers.get("authorization", "")
-        with bind_delegation_token(auth_header):
+        with bind_run_context(delegation_token=extract_bearer_token(raw_request)):
             for tid in reversed(trace_ids):
                 step_results = await revert_turn_mutations(
                     journal,

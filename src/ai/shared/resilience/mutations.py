@@ -19,9 +19,6 @@ from ai.shared.resilience.journal_store import (
     build_journal,
 )
 
-TurnMutationJournal = JournalStore
-InMemoryTurnMutationJournal = MemoryJournal
-
 
 class MutationRevertError(Exception):
     """HTTP error raised while executing a compensating mutation revert request."""
@@ -191,14 +188,12 @@ async def revert_turn_mutations(
 
 
 __all__ = [
-    "InMemoryTurnMutationJournal",
     "JournalStore",
     "MemoryJournal",
     "MutationRecord",
     "MutationRevertError",
     "RedisJournal",
     "RevertStepResult",
-    "TurnMutationJournal",
     "bind_turn_journal",
     "build_journal",
     "build_revert_artifact",

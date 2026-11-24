@@ -22,7 +22,6 @@ from ai.api.routers.threads import router as threads_router
 from ai.bootstrap import build_lifespan, resolve_settings
 from ai.orchestrator.contracts import AgentRegistry, ContextWindowPolicy, InputGuard, OutputGuard
 from ai.shared.config.settings import Settings
-from ai.shared.context.facade import ResearchContextFacade
 from ai.shared.contracts.health import HealthProbe
 from ai.shared.contracts.knowledge import Embedder, KnowledgeStore
 from ai.shared.contracts.rate_limit import RateLimiter
@@ -54,7 +53,6 @@ def create_app(
     library_gateway: LibraryGateway | None = None,
     editor_gateway: EditorGateway | None = None,
     project_gateway: ProjectGateway | None = None,
-    context_facade: ResearchContextFacade | None = None,
 ) -> FastAPI:
     """Create the FastAPI application and attach routers."""
     active_settings = resolve_settings(settings)
@@ -84,7 +82,6 @@ def create_app(
             library_gateway=library_gateway,
             editor_gateway=editor_gateway,
             project_gateway=project_gateway,
-            context_facade=context_facade,
         ),
     )
     app.state.settings = active_settings

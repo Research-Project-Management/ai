@@ -24,7 +24,6 @@ from ai.orchestrator.guards import CitationIntegrityGuard, DefaultInputGuard
 from ai.runtime_builder import InfraBundle, build_agents, build_models, enter_infra
 from ai.shared.config.server import AppEnvironment
 from ai.shared.config.settings import Settings, load_settings
-from ai.shared.context.facade import ResearchContextFacade
 from ai.shared.contracts.health import HealthProbe
 from ai.shared.contracts.knowledge import Embedder, KnowledgeStore
 from ai.shared.contracts.rate_limit import RateLimiter
@@ -122,7 +121,6 @@ def build_lifespan(
     library_gateway: LibraryGateway | None = None,
     editor_gateway: EditorGateway | None = None,
     project_gateway: ProjectGateway | None = None,
-    context_facade: ResearchContextFacade | None = None,
 ) -> LifespanFactory:
     """Build the FastAPI lifespan context manager for AI runtime resources."""
 
@@ -159,7 +157,6 @@ def build_lifespan(
                 library_gateway=library_gateway,
                 editor_gateway=editor_gateway,
                 project_gateway=project_gateway,
-                context_facade=context_facade,
             )
             active_registry = registry if registry is not None else AgentRegistry(agents.specs)
 
@@ -213,7 +210,6 @@ def build_lifespan(
                     infra.qdrant,
                 )
             )
-            app.state.context_facade = agents.context_facade
 
             def _build_graph(active_cp):
                 return build_root_graph(
@@ -221,8 +217,6 @@ def build_lifespan(
                     router_llm=models.router,
                     registry=active_registry,
                     context_policy=context_policy,
-                    context_facade=agents.context_facade,
-                    router_cache=agents.tool_cache,
                     output_guards=active_output_guards,
                     max_rounds=max_rounds,
                     checkpointer=active_cp,

@@ -8,7 +8,7 @@ from typing import Any
 
 from langgraph.constants import TAG_NOSTREAM
 
-from ai.orchestrator.contracts import RoutingDecision
+from ai.orchestrator.contracts import AgentName, RoutingDecision
 from ai.shared.contracts.run_control import RunUsage
 from ai.shared.llm.output import StreamChannelSplitter
 from ai.shared.workflow.events import PATCH_PREVIEW, TOOL_COMPLETED, TOOL_STARTED
@@ -180,7 +180,7 @@ class SseTranslator:
                         {
                             "patch": to_json_safe(patch_payload),
                             "total_patches": int(data.get("total_patches") or 1),
-                            "agent": str(data.get("agent") or "editor_agent"),
+                            "agent": str(data.get("agent") or AgentName.EDITOR),
                         },
                     )
                 ]

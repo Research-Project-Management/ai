@@ -49,11 +49,10 @@ async def health(
 
 @router.get("/health/resilience", dependencies=[Depends(verify_internal_key)])
 async def resilience_health(request: Request) -> dict[str, Any]:
-    """Return Circuit Breaker states, tool & LLM metrics, queue depth, token quotas & provenance."""
+    """Return Circuit Breaker states, tool & LLM metrics, queue depth, and token quotas."""
     state = request.app.state
     breakers, tool_metrics, llm_metrics, ingestion_queue = _collect_runtime_snapshots(state)
     budget = getattr(state, "token_budget", None)
-    facade = getattr(state, "context_facade", None)
 
     token_budget_snapshot: dict[str, Any] = {}
     if budget is not None:
@@ -68,7 +67,6 @@ async def resilience_health(request: Request) -> dict[str, Any]:
         "llm_metrics": llm_metrics,
         "ingestion_queue": ingestion_queue,
         "token_budget": token_budget_snapshot,
-        "provenance": facade.get_summary_metrics() if facade is not None else {},
     }
 
 

@@ -1,0 +1,125 @@
+[
+  {
+    "source_id": "helios-m3-arch",
+    "source_type": "project_doc",
+    "filename": "m3_architecture_v1.md",
+    "title": "Helios-AI Architecture Spec v1 (Month 3)",
+    "month": 3,
+    "effective_at": "2025-03-01",
+    "author": "Linh & Huy",
+    "content": "# Helios-AI Architecture Specification v1 (Month 3 - 2025-03)\n\nAuthors: Linh (AI Engineer), Huy (Backend Lead)\n\n## 1. Vector Store & Embeddings (MVP)\n- Vector Database: Qdrant collection `helios_mvp_768d`.\n- Embedding model: `nomic-embed-text` (768 dimensions) running on single-node Ollama.\n- Retrieval strategy: Dense vector similarity Top-K = 10, no cross-encoder reranking.\n\n## 2. Large PDF Ingestion Policy v1 (Month 3)\n- Mode: synchronous `POST /ingest` blocking HTTP connection until parsing completes.\n- Concurrency policy: `max_concurrency = 8` parallel workers parsing PDF pages simultaneously.\n- Memory policy: full chunk list buffered in memory; HTTP timeout = 120s.\n\n## 3. LLM Routing (MVP)\n- All requests route directly to a single model (`gpt-4o-mini`) with no router tier.\n"
+  },
+  {
+    "source_id": "helios-m3-team",
+    "source_type": "project_doc",
+    "filename": "m3_team_roster_roles.md",
+    "title": "Helios-AI Core Team Roster (Month 3)",
+    "month": 3,
+    "effective_at": "2025-03-05",
+    "author": "Minh",
+    "content": "# Helios-AI Core Team Roster (Month 3 - 2025-03)\n\nPrepared by: Minh (Product Manager)\n\nThe Helios-AI core engineering & product team consists of 5 members:\n1. Minh — Product Manager (PM): owns product roadmap, enterprise pilot onboarding, SLA KPIs, and stakeholder reporting.\n2. Linh — AI Engineer: owns RAG pipeline, LangGraph orchestrator, prompt routing, and evaluation suite.\n3. Huy — Backend Lead: owns NestJS API gateway, PostgreSQL data layer, SSE streaming proxy, and internal auth.\n4. Trang — Frontend Lead: owns Next.js App Router UI, real-time streaming chat drawer, and initial ownership of the Citation Viewer UI.\n5. Dũng — DevOps & QA Engineer: owns Docker Compose/Kubernetes infra, CI/CD checks, observability, and load testing.\n"
+  },
+  {
+    "source_id": "helios-m3-bench",
+    "source_type": "report",
+    "filename": "m3_benchmark_q1.md",
+    "title": "Helios-AI Q1 Baseline Benchmark Report (Month 3)",
+    "month": 3,
+    "effective_at": "2025-03-28",
+    "author": "Linh",
+    "content": "# Helios-AI Q1 Baseline Benchmark Report (Month 3 - 2025-03)\n\nAuthor: Linh (AI Engineer)\nDataset: 120 real enterprise Q&A queries across 4 pilot teams.\n\n## Baseline Metrics at Month 3\n- RAG Answer Accuracy: 71.4% (dense-only retrieval struggled on multi-hop tables and policy questions).\n- Average P95 TTFT Latency: 2.8s.\n- Monthly LLM & Embedding API Cost: $120/month (100% of queries hit a single default LLM without intent routing).\n- Cache Hit Rate: 8%.\n"
+  },
+  {
+    "source_id": "helios-m6-oom",
+    "source_type": "incident",
+    "filename": "m6_postmortem_oom_pdf.md",
+    "title": "Postmortem #INC-064: Large PDF Ingestion OOMKilled (Month 6)",
+    "month": 6,
+    "effective_at": "2025-06-12",
+    "supersedes_source_ids": ["helios-m3-arch"],
+    "author": "Dũng & Huy",
+    "content": "# Incident Postmortem #INC-064: Worker OOMKilled on Large PDFs (Month 6 - 2025-06)\n\nAuthors: Dũng (DevOps/QA), Huy (Backend Lead)\n\n## Incident Summary\nIn Month 6, an enterprise customer uploaded 15 scanned technical PDFs (180-250 pages each) concurrently.\nUnder the Month 3 v1 policy (synchronous `POST /ingest` and `max_concurrency = 8`), worker pod memory spiked to 14.2 GB RAM and Kubernetes terminated the AI pod with OOMKilled (Exit Code 137).\n\n## Permanent Remediation (Supersedes Month 3 Policy)\nEffective Month 6, Helios-AI deprecated synchronous ingestion and `max_concurrency = 8`:\n1. Switched `POST /knowledge/ingest` to async `202 Accepted` backed by a bounded `IngestionJobQueue` + `GET /knowledge/jobs/{job_id}` polling.\n2. Reduced PDF ingestion `max_concurrency = 2` (hard-capped at 2 concurrent workers) to keep peak RAM below 2.5 GB.\n3. Enforced streaming page extraction and `EMBEDDING_BATCH_SIZE = 32`.\n"
+  },
+  {
+    "source_id": "helios-m6-arch",
+    "source_type": "project_doc",
+    "filename": "m6_architecture_v2.md",
+    "title": "Helios-AI Architecture Spec v2 (Month 6)",
+    "month": 6,
+    "effective_at": "2025-06-20",
+    "author": "Linh & Huy",
+    "content": "# Helios-AI Architecture Specification v2 (Month 6 - 2025-06)\n\nAuthors: Linh (AI Engineer), Huy (Backend Lead)\n\n## 1. Hybrid RRF Retrieval + Jina Embeddings v3\n- Upgraded embedding model from 768d Ollama to Jina Embeddings v3 (`jina-embeddings-v3`, 1024 dimensions) in Qdrant collection `kb_jina_v3_1024`.\n- Enabled Hybrid RRF (Dense + Sparse BM25) followed by Cross-Encoder Reranking.\n\n## 2. 3-Tier LLM Routing\n- Router tier classifies query intent quickly before specialist invocation.\n- Specialist tier executes multi-step RAG and workspace workflows.\n- Default synthesizer tier produces grounded user responses and handles fallbacks.\n\n## 3. Large PDF Policy v2\n- Confirmed post-#INC-064 policy: async `202 Accepted` ingestion queue with `max_concurrency = 2`.\n"
+  },
+  {
+    "source_id": "helios-m6-review",
+    "source_type": "report",
+    "filename": "m6_midyear_review.md",
+    "title": "Helios-AI Mid-Year Product Review (Month 6)",
+    "month": 6,
+    "effective_at": "2025-06-30",
+    "author": "Minh",
+    "content": "# Helios-AI Mid-Year Product Review (Month 6 - 2025-06)\n\nAuthor: Minh (Product Manager)\n\n## Growth & Adoption\n- Enterprise pilot teams grew from 4 teams (Month 3) to 18 active pilot organizations.\n- Trang shipped the first version of the Citation Drawer and Model Selector UI.\n\n## Interim Metrics (Month 6)\n- RAG Answer Accuracy: improved from 71.4% (Month 3) to 82.1% (Month 6) after launching Hybrid RRF + Rerank.\n- Monthly LLM Cost: peaked temporarily at $145/month due to dual-collection re-indexing during the Jina v3 migration before router optimization took full effect.\n"
+  },
+  {
+    "source_id": "helios-m9-metrics",
+    "source_type": "report",
+    "filename": "m9_q3_metrics_cost.md",
+    "title": "Helios-AI Q3 Production Metrics & Cost Report (Month 9)",
+    "month": 9,
+    "effective_at": "2025-09-10",
+    "author": "Minh & Linh",
+    "content": "# Helios-AI Q3 Production Metrics & Cost Report (Month 9 - 2025-09)\n\nAuthors: Minh (PM), Linh (AI Engineer)\n\n## Production KPI Progression (Month 3 -> Month 6 -> Month 9)\n- RAG Answer Accuracy: reached 88.6% in Month 9 (+17.2 percentage points vs 71.4% at Month 3, and 82.1% at Month 6).\n- Average P95 TTFT Latency: dropped to 1.15s in Month 9 (down from 2.8s at Month 3).\n- Monthly LLM & API Cost: stabilized at $85/month in Month 9, down 29% from $120/month at Month 3 and 41% from $145/month at Month 6.\n- Optimization drivers: 62% of simple classification traffic routed to flash tier, Redis cache hit rate reached 41%.\n- Production footprint: 14 active workspaces, 420 indexed documents.\n"
+  },
+  {
+    "source_id": "helios-m9-handoff",
+    "source_type": "project_doc",
+    "filename": "m9_team_ownership_handoff.md",
+    "title": "Helios-AI Month 9 Team Update & Ownership Handoff (Month 9)",
+    "month": 9,
+    "effective_at": "2025-09-18",
+    "supersedes_source_ids": ["helios-m3-team"],
+    "author": "Minh & Trang",
+    "content": "# Helios-AI Team Update & Ownership Handoff (Month 9 - 2025-09)\n\nAuthors: Minh (PM), Trang\n\n## Frontend Ownership Transition (Supersedes Month 3 Citation Viewer Assignment)\n- Khánh joined the Helios-AI team as Senior Frontend Engineer in Month 9 and assumed full day-to-day ownership of the Citation Viewer UI (interactive citation drawer, PDF page preview, and spreadsheet cell jump links).\n- Trang transitioned out of maintaining individual UI widgets into the role of Staff Frontend Architect, focusing on platform design tokens, SSE state resilience, and cross-workspace UI architecture.\n"
+  },
+  {
+    "source_id": "helios-m9-roadmap",
+    "source_type": "project_doc",
+    "filename": "m9_roadmap_q4_backlog.md",
+    "title": "Helios-AI Q4 Engineering Roadmap & Current Status (Month 9)",
+    "month": 9,
+    "effective_at": "2025-09-25",
+    "author": "Minh, Trang & Linh",
+    "content": "# Helios-AI Q4 Engineering Roadmap & Operational Status (Month 9 - 2025-09)\n\nAuthors: Minh (PM), Trang, Linh\n\n## Top Q4 Priorities (Planned as of Month 9)\n1. Priority #1 — Durable Postgres Checkpointing: deploy `AsyncPostgresSaver` (`DATABASE_URL`) so conversation checkpoints and Time Travel rewind survive multi-pod restarts.\n2. Priority #2 — Table & Spreadsheet Citation Highlighting (Khánh & Huy).\n3. Priority #3 — Automated Long-Horizon Evals CI Gate (Linh & Dũng).\n\n## Operational Status as of Month 9\n- Large PDF ingestion remains async `202 Accepted` with `max_concurrency = 2` until dedicated autoscaling PDF worker pods arrive.\n"
+  },
+  {
+    "source_id": "helios-m12-annual",
+    "source_type": "report",
+    "filename": "m12_annual_production_review.md",
+    "title": "Helios-AI Year-End Annual Production Review (Month 12)",
+    "month": 12,
+    "effective_at": "2025-12-15",
+    "author": "Minh & Linh",
+    "content": "# Helios-AI Year-End Annual Production Review (Month 12 - 2025-12)\n\nAuthors: Minh (PM), Linh (AI Engineer)\n\n## Full-Year KPI Progression (Month 3 -> Month 6 -> Month 9 -> Month 12)\n- RAG Answer Accuracy: 91.2% in Month 12 (up from 71.4% M3, 82.1% M6, 88.6% M9).\n- Average P95 TTFT Latency: 0.95s in Month 12 (down from 2.8s M3 and 1.15s M9).\n- Monthly LLM & API Cost: $78/month in Month 12 (down from $120/month M3, $145/month M6 peak, and $85/month M9).\n- Production Scale: 28 active enterprise workspaces, 1,150 indexed documents.\n\n## Q4 Execution Outcome\n- Durable Postgres Checkpointing (`AsyncPostgresSaver`) was completed and is now live in production across all multi-pod API replicas, persisting conversation history and rewind state reliably.\n"
+  },
+  {
+    "source_id": "helios-m12-adr019",
+    "source_type": "policy",
+    "filename": "m12_adr019_pdf_autoscaling.md",
+    "title": "ADR-019: Dedicated Autoscaling PDF Workers & Concurrency Update (Month 12)",
+    "month": 12,
+    "effective_at": "2025-12-10",
+    "supersedes_source_ids": ["helios-m6-oom", "helios-m6-arch", "helios-m9-roadmap"],
+    "author": "Huy & Dũng",
+    "content": "# Architecture Decision Record ADR-019: PDF Worker Autoscaling (Month 12 - 2025-12)\n\nAuthors: Huy (Backend Lead), Dũng (DevOps & QA)\nStatus: Active (Supersedes Month 6 & Month 9 `max_concurrency = 2` cap)\n\n## Decision\n1. Dedicated 4 GB RAM autoscaling PDF worker pods with isolated memory cgroups are now deployed in production.\n2. Under `IngestionJobQueue` (keeping async `202 Accepted` + `GET /knowledge/jobs/{job_id}` polling), the active PDF ingestion concurrency limit is raised from `max_concurrency = 2` to **`max_concurrency = 4`**.\n3. Month 3's synchronous `POST /ingest` and `max_concurrency = 8` architecture remains permanently prohibited.\n"
+  },
+  {
+    "source_id": "helios-m12-security",
+    "source_type": "policy",
+    "filename": "m12_security_compliance.md",
+    "title": "Helios-AI SOC2 Readiness & Multi-Tenant Security Standard (Month 12)",
+    "month": 12,
+    "effective_at": "2025-12-18",
+    "author": "Huy & Dũng",
+    "content": "# Helios-AI SOC2 Type I Readiness & Multi-Tenant Compliance Standard (Month 12 - 2025-12)\n\nAuthors: Huy (Backend Lead), Dũng (DevOps/QA)\n\n## Mandatory Guardrails\n- Strict Multi-Tenant Isolation: Every Qdrant search/upsert and LangGraph checkpoint lookup validates `space_id`; zero cross-workspace leakage is enforced.\n- Service Auth & Observability: `X-Internal-Key` + HS256 delegation JWTs protect internal APIs, Prometheus `/metrics` tracks token and error budgets, and runtime containers execute as non-root user `flux`.\n"
+  }
+]

@@ -39,6 +39,8 @@ class RedisConfig(EnvConfigBase):
     """Redis configuration for caching and rate limiting."""
 
     redis_url: SecretStr = Field(default=SecretStr("redis://localhost:31942"))
+    redis_socket_connect_timeout: float = Field(default=1.5, gt=0.0, le=30.0)
+    redis_socket_timeout: float = Field(default=2.0, gt=0.0, le=30.0)
 
     @property
     def is_configured(self) -> bool:
@@ -58,6 +60,7 @@ class QdrantConfig(EnvConfigBase):
 
     qdrant_url: str = Field(default="http://localhost:27519")
     qdrant_api_key: SecretStr = Field(default=SecretStr(""))
+    qdrant_timeout_seconds: int = Field(default=10, ge=1, le=120)
 
     @property
     def is_configured(self) -> bool:

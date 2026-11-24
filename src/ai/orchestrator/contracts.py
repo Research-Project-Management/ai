@@ -2,6 +2,7 @@
 
 import re
 from collections.abc import Iterable, Sequence
+from enum import StrEnum
 from typing import Any, Final, Literal, Protocol
 
 from langchain_core.messages import BaseMessage
@@ -9,6 +10,17 @@ from langchain_core.runnables import RunnableConfig
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from ai.shared.contracts.run_control import RunUsage
+
+
+class AgentName(StrEnum):
+    """Canonical registered specialist agent identifiers."""
+
+    RAG = "rag_agent"
+    LIBRARY = "library_agent"
+    PROJECT = "project_agent"
+    EDITOR = "editor_agent"
+    WEB_SEARCH = "web_search_agent"
+
 
 RESERVED_NODE_NAMES: Final[frozenset[str]] = frozenset(
     {"turn_init", "supervisor", "round_gate", "direct_respond", "synthesizer", "output_guard"}

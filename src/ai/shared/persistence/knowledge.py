@@ -8,6 +8,7 @@ import zlib
 from collections import Counter
 from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 
 from qdrant_client import AsyncQdrantClient, models
 
@@ -24,6 +25,33 @@ from ai.shared.llm.embeddings import build_embedder
 
 _TOKEN_RE = re.compile(r"\w+")
 _SPARSE_BUCKETS = 2_000_003
+
+
+_BI_TEMPORAL_FIELDS = (
+    "valid_from",
+    "valid_to",
+    "recorded_at",
+    "lifecycle_status",
+    "supersedes_source_id",
+)
+
+
+def _extract_superseded_ids(doc: KnowledgeDocumentInput) -> list[str]:
+    candidates: list[str] = []
+    single = doc.metadata.get("supersedes_source_id")
+    if isinstance(single, str):
+        candidates.append(single)
+    many = doc.metadata.get("supersedes_source_ids")
+    if isinstance(many, Sequence) and not isinstance(many, str | bytes):
+        candidates.extend(str(item) for item in many if item)
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for raw in candidates:
+        sid = raw.strip()
+        if sid and sid != doc.source_id and sid not in seen:
+            seen.add(sid)
+            ordered.append(sid)
+    return ordered
 
 
 def chunk_text(
@@ -166,6 +194,10 @@ class QdrantKnowledgeStore:
         )
 
         dense_vectors = await self._embedder.embed_documents([c.content for c in chunks])
+        recorded_at = datetime.now(UTC).isoformat()
+        doc_valid_from = str(
+            doc.metadata.get("valid_from") or doc.metadata.get("effective_at") or recorded_at
+        )
         points: list[models.PointStruct] = []
         for chunk, dense_vec in zip(chunks, dense_vectors, strict=True):
             point_id = str(
@@ -175,6 +207,18 @@ class QdrantKnowledgeStore:
                 )
             )
             sparse_vec = compute_sparse_vector(chunk.content)
+            merged_meta = {**doc.metadata, **chunk.metadata}
+            bi_temporal = {
+                "valid_from": str(
+                    merged_meta.get("valid_from")
+                    or merged_meta.get("effective_at")
+                    or doc_valid_from
+                ),
+                "valid_to": merged_meta.get("valid_to"),
+                "recorded_at": recorded_at,
+                "lifecycle_status": str(merged_meta.get("lifecycle_status") or "active").lower(),
+                "supersedes_source_id": merged_meta.get("supersedes_source_id"),
+            }
             payload = {
                 "space_id": doc.space_id,
                 "source_type": doc.source_type,
@@ -184,7 +228,8 @@ class QdrantKnowledgeStore:
                 "page": chunk.page,
                 "chunk_index": chunk.chunk_index,
                 "content": chunk.content,
-                "metadata": {**doc.metadata, **chunk.metadata},
+                **bi_temporal,
+                "metadata": {**merged_meta, **bi_temporal},
             }
             points.append(
                 models.PointStruct(
@@ -195,6 +240,27 @@ class QdrantKnowledgeStore:
             )
 
         await self._qdrant.upsert(collection_name=self._target, points=points)
+        superseded_ids = _extract_superseded_ids(doc)
+        if superseded_ids:
+            await self._qdrant.set_payload(
+                collection_name=self._target,
+                payload={
+                    "lifecycle_status": "superseded",
+                    "valid_to": doc_valid_from,
+                },
+                points=models.Filter(
+                    must=[
+                        models.FieldCondition(
+                            key="space_id",
+                            match=models.MatchValue(value=doc.space_id),
+                        ),
+                        models.FieldCondition(
+                            key="source_id",
+                            match=models.MatchAny(any=superseded_ids),
+                        ),
+                    ]
+                ),
+            )
         return len(points)
 
     async def has_source(self, *, space_id: str, source_id: str) -> bool:
@@ -286,6 +352,10 @@ class QdrantKnowledgeStore:
         hits: list[KnowledgeHit] = []
         for point in res.points:
             payload = point.payload or {}
+            hit_meta = dict(payload.get("metadata") or {})
+            for field_name in _BI_TEMPORAL_FIELDS:
+                if field_name in payload:
+                    hit_meta[field_name] = payload[field_name]
             hits.append(
                 KnowledgeHit(
                     source_id=str(payload.get("source_id", "")),
@@ -296,7 +366,7 @@ class QdrantKnowledgeStore:
                     chunk_index=int(payload.get("chunk_index", 0)),
                     page=payload.get("page"),
                     url=payload.get("url"),
-                    metadata=dict(payload.get("metadata") or {}),
+                    metadata=hit_meta,
                 )
             )
         return hits

@@ -11,6 +11,7 @@ from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 from ai.shared.config.database import PostgresConfig
 
 _ALLOWED_MSGPACK_MODULES: Final[tuple[tuple[str, str], ...]] = (
+    ("ai.agents.rag.retrieval.contracts", "RankedPassage"),
     ("ai.orchestrator.contracts", "AgentOutput"),
     ("ai.orchestrator.contracts", "AgentTaskAssignment"),
     ("ai.orchestrator.contracts", "CitationItem"),

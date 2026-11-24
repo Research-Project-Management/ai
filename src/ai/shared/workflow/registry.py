@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from typing import Protocol
+from typing import Any, Protocol
 
 from pydantic import BaseModel
 
@@ -63,3 +63,17 @@ class ToolRegistry[S: RegistrableSpec]:
             f"- `{s.name}` [{s.risk_tier}] ({format_args_hint(s.args_schema)}): {s.description}"
             for s in self._specs
         )
+
+    def to_openai_tools(self) -> list[dict[str, Any]]:
+        """Convert all registered specs into OpenAI function-calling tool schemas."""
+        return [
+            {
+                "type": "function",
+                "function": {
+                    "name": s.name,
+                    "description": s.description,
+                    "parameters": s.args_schema.model_json_schema(),
+                },
+            }
+            for s in self._specs
+        ]

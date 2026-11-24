@@ -19,12 +19,10 @@ from ai.orchestrator.contracts import (
 from ai.orchestrator.policies import DEFAULT_POLICIES, PolicyChain, PolicyContext
 from ai.orchestrator.prompts import build_supervisor_prompt
 from ai.orchestrator.state import RootState
-from ai.shared.context.contracts import extract_viewport_focus
-from ai.shared.context.facade import ResearchContextFacade
+from ai.shared.contracts.run_control import RunUsage
 from ai.shared.llm.factory import ChatRunnable
 from ai.shared.llm.nostream import with_nostream
 from ai.shared.llm.output import extract_text, parse_json_object
-from ai.shared.resilience.cache import ToolCache, build_cache_key
 
 
 def enforce_routing_invariants(
@@ -104,9 +102,6 @@ class LLMSupervisorPlanner:
         router_llm: ChatRunnable,
         *,
         context_policy: ContextWindowPolicy | None = None,
-        context_facade: ResearchContextFacade | None = None,
-        cache: ToolCache | None = None,
-        cache_ttl_seconds: int = 300,
         max_rounds: int = 3,
         policies: PolicyChain | None = None,
     ) -> None:
@@ -114,9 +109,6 @@ class LLMSupervisorPlanner:
         self._context_policy: ContextWindowPolicy = context_policy or SlidingWindowContextPolicy(
             max_messages=6, max_chars=12_000
         )
-        self._context_facade = context_facade
-        self._cache = cache
-        self._cache_ttl = max(30, cache_ttl_seconds)
         self._max_rounds = max_rounds
         self._policies = policies or DEFAULT_POLICIES
 
@@ -126,6 +118,15 @@ class LLMSupervisorPlanner:
         registry: AgentRegistry,
         config: RunnableConfig,
     ) -> RoutingDecision:
+        decision, _ = await self.plan_with_usage(state, registry, config)
+        return decision
+
+    async def plan_with_usage(
+        self,
+        state: RootState,
+        registry: AgentRegistry,
+        config: RunnableConfig,
+    ) -> tuple[RoutingDecision, RunUsage]:
         messages = state.get("messages", [])
         prior_outputs = state.get("agent_outputs", [])
         latest_human = ""
@@ -135,35 +136,16 @@ class LLMSupervisorPlanner:
                 break
 
         if not latest_human:
-            return RoutingDecision(
-                mode="synthesize" if prior_outputs else "direct",
-                reasoning="empty query",
+            return (
+                RoutingDecision(
+                    mode="synthesize" if prior_outputs else "direct",
+                    reasoning="empty query",
+                ),
+                RunUsage(),
             )
 
         recent = self._context_policy.select_messages(messages)
         req_ctx = state.get("context")
-        envelope = None
-        if self._context_facade is not None and req_ctx:
-            focus = extract_viewport_focus(req_ctx)
-            title = str(req_ctx.get("project_title") or req_ctx.get("title") or "").strip()
-            venue = str(req_ctx.get("target_venue") or req_ctx.get("venue") or "").strip() or None
-            deadline = (
-                str(req_ctx.get("target_deadline") or req_ctx.get("deadline") or "").strip() or None
-            )
-            hypothesis = (
-                str(req_ctx.get("primary_hypothesis") or req_ctx.get("hypothesis") or "").strip()
-                or None
-            )
-
-            envelope = self._context_facade.assemble_context(
-                focus,
-                latest_human,
-                research_title=title or "Research Project",
-                target_venue=venue,
-                deadline=deadline,
-                hypothesis=hypothesis,
-            )
-
         round_count = state.get("round_count", 1)
         system_prompt = build_supervisor_prompt(
             registry.format_catalog(),
@@ -172,51 +154,18 @@ class LLMSupervisorPlanner:
             plan_summary=state.get("plan_summary", ""),
             prior_outputs=prior_outputs,
             request_context=req_ctx,
-            context_envelope=envelope,
         )
-
-        cache_key = ""
-        if self._cache is not None and round_count == 1 and not prior_outputs:
-            serialized_recent = [f"{msg.type}:{extract_text(msg.content)}" for msg in recent]
-            cache_key = build_cache_key(
-                "router_plan",
-                {"sys": system_prompt, "msgs": serialized_recent},
-            )
-            cached = await self._cache.get(cache_key)
-            if isinstance(cached, dict) and "raw_text" in cached:
-                cached_decision = parse_routing_decision(
-                    str(cached["raw_text"]),
-                    registry,
-                    has_prior_outputs=False,
-                )
-                return enforce_routing_invariants(
-                    cached_decision,
-                    query=latest_human,
-                    request_context=req_ctx,
-                    prior_outputs=prior_outputs,
-                    registry=registry,
-                    policies=self._policies,
-                )
 
         prompt_messages: list[BaseMessage] = [SystemMessage(content=system_prompt), *recent]
         response = await self._router_llm.ainvoke(prompt_messages, config=with_nostream(config))
+        router_usage = RunUsage.from_message(response)
         raw_text = extract_text(response.content)
         decision = parse_routing_decision(
             raw_text,
             registry,
             has_prior_outputs=bool(prior_outputs),
         )
-        if (
-            self._cache is not None
-            and cache_key
-            and not decision.reasoning.startswith("fallback to")
-        ):
-            await self._cache.set(
-                cache_key,
-                {"raw_text": raw_text},
-                ttl_seconds=self._cache_ttl,
-            )
-        return enforce_routing_invariants(
+        enforced = enforce_routing_invariants(
             decision,
             query=latest_human,
             request_context=req_ctx,
@@ -224,3 +173,4 @@ class LLMSupervisorPlanner:
             registry=registry,
             policies=self._policies,
         )
+        return enforced, router_usage

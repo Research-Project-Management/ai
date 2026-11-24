@@ -10,14 +10,11 @@ import pytest
 
 from ai.agents.editor.gateway.contracts import EditorDocument, EditorFileInfo, EditorScope
 from ai.agents.editor.tools.contracts import EditorToolRuntime
-from ai.agents.editor.tools.registry import build_default_editor_tool_registry
 from ai.agents.editor.tools.table import (
     InsertExperimentTableArgs,
     build_table_tools,
     handle_insert_experiment_table,
 )
-from ai.shared.context.contracts import EntityDomain, RelationType
-from ai.shared.context.facade import ResearchContextFacade
 from ai.shared.github.client import HttpGitHubArtifactClient
 from ai.shared.github.contracts import GitHubArtifactContent, GitHubArtifactError
 from ai.shared.tabular.builder import LatexBooktabsBuilder
@@ -299,58 +296,6 @@ def test_build_table_tools_registry() -> None:
     tool = tools[0]
     assert tool.name == "insert_experiment_table"
     assert tool.risk_tier == "propose"
-
-
-async def test_editor_insert_experiment_table_registers_provenance_lineage() -> None:
-    doc = """\\documentclass{article}
-\\begin{document}
-\\section{Experiments}
-\\end{document}
-"""
-    gateway = _InMemoryFakeEditorGateway(doc)
-    runtime = EditorToolRuntime(
-        gateway=gateway,  # type: ignore[arg-type]
-        scope=EditorScope(space_id="space-1", active_file_path="main.tex"),
-    )
-    fake_gh = _FakeGitHubClient()
-    facade = ResearchContextFacade()
-
-    registry = build_default_editor_tool_registry(
-        artifact_client=fake_gh,
-        context_facade=facade,
-    )
-    spec = registry.get("insert_experiment_table")
-    assert spec is not None
-
-    args = InsertExperimentTableArgs(
-        repo="flux-lab/vision-exp",
-        file_path="eval/metrics.csv",
-        caption="Vision Benchmark",
-        label="tab:vision_eval",
-        target_section="Experiments",
-    )
-    result = await spec.handler(runtime, args)
-    assert result.status == "ok"
-
-    table_id = "page:space-1#tab:vision_eval"
-    artifact_id = (
-        "github:flux-lab/vision-exp@a8f2c3e4b5d6e7f8a8f2c3e4b5d6e7f8a8f2c3e4:eval/metrics.csv"
-    )
-
-    table_node = facade.graph.get_node(table_id)
-    artifact_node = facade.graph.get_node(artifact_id)
-    assert table_node is not None and table_node.domain == EntityDomain.PAGE
-    assert artifact_node is not None and artifact_node.domain == EntityDomain.EXPERIMENT
-    assert facade.graph.has_edge(artifact_id, table_id, RelationType.PROVES) is True
-
-    lineage = facade.trace_claim_origin(table_id)
-    assert len(lineage) == 1
-    assert lineage[0].id == artifact_id
-
-    audit_001 = [
-        f for f in facade.audit_integrity() if f.rule_id == "AUDIT_001" and table_id in f.entity_ids
-    ]
-    assert audit_001 == []
 
 
 def test_editor_graph_extracts_provenance_artifacts_from_observations() -> None:

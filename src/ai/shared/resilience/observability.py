@@ -284,8 +284,16 @@ class RedisTokenBudget:
     async def check(self, scope: str) -> TokenQuotaStatus:
         clean_scope = scope.strip() or "default"
         try:
-            raw_tok = await await_redis(self._redis.get(self._tokens_key(clean_scope)))
-            raw_cost = await await_redis(self._redis.get(self._cost_key(clean_scope)))
+            tok_key = self._tokens_key(clean_scope)
+            cost_key = self._cost_key(clean_scope)
+            if hasattr(self._redis, "pipeline"):
+                async with self._redis.pipeline(transaction=False) as pipe:
+                    pipe.get(tok_key)
+                    pipe.get(cost_key)
+                    raw_tok, raw_cost = await await_redis(pipe.execute())
+            else:
+                raw_tok = await await_redis(self._redis.get(tok_key))
+                raw_cost = await await_redis(self._redis.get(cost_key))
             used = int(raw_tok) if raw_tok is not None else 0
             cost_micros = int(raw_cost) if raw_cost is not None else 0
             return self._status(used, cost_micros)
@@ -306,11 +314,22 @@ class RedisTokenBudget:
         try:
             tok_key = self._tokens_key(clean_scope)
             cost_key = self._cost_key(clean_scope)
-            used = int(await await_redis(self._redis.incrby(tok_key, tokens)))
-            await await_redis(self._redis.expire(tok_key, self._window_seconds, nx=True))
-            total_micros = int(await await_redis(self._redis.incrby(cost_key, cost_micros)))
-            await await_redis(self._redis.expire(cost_key, self._window_seconds, nx=True))
-            await await_redis(self._redis.sadd(self._scopes_key, clean_scope))
+            if hasattr(self._redis, "pipeline"):
+                async with self._redis.pipeline(transaction=False) as pipe:
+                    pipe.incrby(tok_key, tokens)
+                    pipe.expire(tok_key, self._window_seconds, nx=True)
+                    pipe.incrby(cost_key, cost_micros)
+                    pipe.expire(cost_key, self._window_seconds, nx=True)
+                    pipe.sadd(self._scopes_key, clean_scope)
+                    results = await await_redis(pipe.execute())
+                used = int(results[0])
+                total_micros = int(results[2])
+            else:
+                used = int(await await_redis(self._redis.incrby(tok_key, tokens)))
+                await await_redis(self._redis.expire(tok_key, self._window_seconds, nx=True))
+                total_micros = int(await await_redis(self._redis.incrby(cost_key, cost_micros)))
+                await await_redis(self._redis.expire(cost_key, self._window_seconds, nx=True))
+                await await_redis(self._redis.sadd(self._scopes_key, clean_scope))
             return self._status(used, total_micros)
         except (RedisError, OSError, TimeoutError, ValueError) as exc:
             logger.warning(
@@ -323,19 +342,36 @@ class RedisTokenBudget:
     async def snapshot(self) -> dict[str, Any]:
         try:
             members = await await_redis(self._redis.smembers(self._scopes_key))
+            sorted_scopes = sorted(str(m) for m in members)
             expired: list[str] = []
             active_scopes = 0
             total_tokens = 0
             total_micros = 0
-            for raw_scope in sorted(str(m) for m in members):
-                raw_tok = await await_redis(self._redis.get(self._tokens_key(raw_scope)))
-                if raw_tok is None:
-                    expired.append(raw_scope)
-                    continue
-                raw_cost = await await_redis(self._redis.get(self._cost_key(raw_scope)))
-                active_scopes += 1
-                total_tokens += int(raw_tok)
-                total_micros += int(raw_cost) if raw_cost is not None else 0
+            if sorted_scopes and hasattr(self._redis, "pipeline"):
+                async with self._redis.pipeline(transaction=False) as pipe:
+                    for raw_scope in sorted_scopes:
+                        pipe.get(self._tokens_key(raw_scope))
+                        pipe.get(self._cost_key(raw_scope))
+                    raw_values = await await_redis(pipe.execute())
+                for idx, raw_scope in enumerate(sorted_scopes):
+                    raw_tok = raw_values[idx * 2]
+                    raw_cost = raw_values[idx * 2 + 1]
+                    if raw_tok is None:
+                        expired.append(raw_scope)
+                        continue
+                    active_scopes += 1
+                    total_tokens += int(raw_tok)
+                    total_micros += int(raw_cost) if raw_cost is not None else 0
+            else:
+                for raw_scope in sorted_scopes:
+                    raw_tok = await await_redis(self._redis.get(self._tokens_key(raw_scope)))
+                    if raw_tok is None:
+                        expired.append(raw_scope)
+                        continue
+                    raw_cost = await await_redis(self._redis.get(self._cost_key(raw_scope)))
+                    active_scopes += 1
+                    total_tokens += int(raw_tok)
+                    total_micros += int(raw_cost) if raw_cost is not None else 0
             if expired:
                 await await_redis(self._redis.srem(self._scopes_key, *expired))
             return {

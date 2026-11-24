@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Sequence
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
@@ -21,7 +21,8 @@ from ai.orchestrator.contracts import (
     RoutePlanner,
     RoutingDecision,
 )
-from ai.orchestrator.prompts import build_synthesizer_prompt
+from ai.orchestrator.policies import DEFAULT_POLICIES, PolicyChain, PolicyContext
+from ai.orchestrator.prompts import build_direct_system_prompt, build_synthesizer_prompt
 from ai.orchestrator.state import RESET_AGENT_OUTPUTS, RESET_RUN_USAGE, RootState
 from ai.shared.contracts.run_control import RunUsage
 from ai.shared.llm.factory import ChatRunnable
@@ -29,6 +30,18 @@ from ai.shared.llm.nostream import with_nostream
 from ai.shared.llm.output import extract_text
 
 logger = logging.getLogger(__name__)
+
+
+@runtime_checkable
+class _UsageAwareRoutePlanner(Protocol):
+    """Optional extension for RoutePlanners that also report router LLM token usage."""
+
+    async def plan_with_usage(
+        self,
+        state: Any,
+        registry: AgentRegistry,
+        config: RunnableConfig,
+    ) -> tuple[RoutingDecision, RunUsage]: ...
 
 
 def _latest_user_query(messages: Sequence[BaseMessage]) -> str:
@@ -51,6 +64,7 @@ class RootGraphNodes:
         output_guards: Sequence[OutputGuard],
         has_blocking_guards: bool,
         max_rounds: int,
+        policies: PolicyChain = DEFAULT_POLICIES,
         store: BaseStore | None = None,
     ) -> None:
         self._llm = llm
@@ -60,6 +74,7 @@ class RootGraphNodes:
         self._output_guards = tuple(output_guards)
         self._has_blocking_guards = has_blocking_guards
         self._max_rounds = max_rounds
+        self._policies = policies
         self._store = store
 
     async def turn_init(self, state: RootState, config: RunnableConfig) -> dict[str, Any]:
@@ -94,38 +109,51 @@ class RootGraphNodes:
         """Plan round routing via intent hint or Supervisor `RoutePlanner`."""
         current_round = state.get("round_count", 0) + 1
         hint = (state.get("intent_hint") or "").strip()
+        latest_query = _latest_user_query(state.get("messages", []))
+        router_usage = RunUsage()
 
-        if current_round == 1:
-            if hint == "direct":
-                decision = RoutingDecision(
-                    mode="direct",
-                    reasoning="explicit direct intent_hint",
-                )
-            elif hint and hint in self._registry.names:
-                instruction = _latest_user_query(state.get("messages", [])) or hint
-                decision = RoutingDecision(
-                    mode="delegate",
-                    targets=(AgentTaskAssignment(agent=hint, instruction=instruction),),
-                    needs_followup=False,
-                    reasoning=f"explicit intent_hint={hint}",
-                )
-            elif self._registry.is_empty:
-                decision = RoutingDecision(
-                    mode="direct",
-                    reasoning="no specialist agents registered",
-                )
-            else:
-                decision = await self._planner.plan(
-                    {**state, "round_count": current_round},
+        if current_round == 1 and hint == "direct":
+            decision = RoutingDecision(
+                mode="direct",
+                reasoning="explicit direct intent_hint",
+            )
+        elif current_round == 1 and hint and hint in self._registry.names:
+            instruction = latest_query or hint
+            decision = RoutingDecision(
+                mode="delegate",
+                targets=(AgentTaskAssignment(agent=hint, instruction=instruction),),
+                needs_followup=False,
+                reasoning=f"explicit intent_hint={hint}",
+            )
+        elif current_round == 1 and self._registry.is_empty:
+            decision = RoutingDecision(
+                mode="direct",
+                reasoning="no specialist agents registered",
+            )
+        else:
+            planner_state = {**state, "round_count": current_round}
+            if isinstance(self._planner, _UsageAwareRoutePlanner):
+                decision, router_usage = await self._planner.plan_with_usage(
+                    planner_state,
                     self._registry,
                     config,
                 )
-        else:
-            decision = await self._planner.plan(
-                {**state, "round_count": current_round},
-                self._registry,
-                config,
-            )
+            else:
+                decision = await self._planner.plan(
+                    planner_state,
+                    self._registry,
+                    config,
+                )
+
+        decision = self._policies.apply(
+            decision,
+            PolicyContext(
+                query=latest_query,
+                request_context=state.get("context"),
+                prior_outputs=state.get("agent_outputs", []),
+                registry=self._registry,
+            ),
+        )
 
         prev_rounds = list(state.get("executed_rounds") or [])
         if decision.mode == "delegate" and decision.targets:
@@ -133,13 +161,20 @@ class RootGraphNodes:
         route = "->".join(prev_rounds) if prev_rounds else "direct"
         plan_summary = decision.plan_summary or state.get("plan_summary", "")
 
-        return {
+        updates: dict[str, Any] = {
             "round_count": current_round,
             "routing_decision": decision,
             "plan_summary": plan_summary,
             "executed_rounds": prev_rounds,
             "route": route,
         }
+        if (
+            router_usage.total_tokens > 0
+            or router_usage.input_tokens > 0
+            or router_usage.output_tokens > 0
+        ):
+            updates["usage"] = router_usage
+        return updates
 
     def dispatch_from_supervisor(self, state: RootState) -> str | list[Send]:
         """Fan out Send commands to selected specialists, or route to direct/synthesizer."""
@@ -174,8 +209,12 @@ class RootGraphNodes:
     async def direct_respond(self, state: RootState, config: RunnableConfig) -> dict[str, Any]:
         """Generate a direct chat answer without specialist delegation."""
         windowed = self._context_policy.select_messages(state.get("messages", []))
+        direct_messages: list[BaseMessage] = [
+            SystemMessage(content=build_direct_system_prompt(state.get("context"))),
+            *windowed,
+        ]
         call_cfg = with_nostream(config) if self._has_blocking_guards else config
-        response = await self._llm.ainvoke(windowed, config=call_cfg)
+        response = await self._llm.ainvoke(direct_messages, config=call_cfg)
         return {
             "final_response": extract_text(response.content),
             "route": "direct",

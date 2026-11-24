@@ -4,6 +4,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from ai.agents.rag.ingestion.digest import TimelineEventInput
 from ai.agents.rag.ingestion.jobs import IngestionJobStatus
 from ai.orchestrator.rewind import CheckpointSummary
 from ai.shared.contracts.health import ComponentStatus
@@ -217,6 +218,23 @@ class KnowledgeDeleteResponse(BaseModel):
     deleted: bool = True
     source_type: str | None = None
     source_id: str | None = None
+
+
+class KnowledgeTimelineDigestRequest(BaseModel):
+    """Payload to compile and index an episodic project timeline digest."""
+
+    space_id: str = Field(..., min_length=1)
+    digest_source_id: str = Field(..., min_length=1)
+    period_label: str = Field(..., min_length=1)
+    events: list[TimelineEventInput] = Field(..., min_length=1)
+
+
+class KnowledgeTimelineDigestResponse(BaseModel):
+    space_id: str
+    digest_source_id: str
+    period_label: str
+    events_included: int
+    chunks_indexed: int
 
 
 class AgentInfoResponse(BaseModel):

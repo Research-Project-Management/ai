@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
 from contextlib import AsyncExitStack
 from dataclasses import dataclass
 
@@ -29,7 +28,6 @@ from ai.agents.web_search.search.registry import SearchProviderRegistry
 from ai.orchestrator.contracts import AgentSpec
 from ai.shared.config.server import AppEnvironment
 from ai.shared.config.settings import Settings
-from ai.shared.context.facade import ResearchContextFacade
 from ai.shared.contracts.knowledge import Embedder, KnowledgeStore
 from ai.shared.github.client import HttpGitHubArtifactClient
 from ai.shared.llm.factory import ChatRunnable, ContextAwareChatRunnable, build_chat_model
@@ -38,7 +36,7 @@ from ai.shared.persistence.knowledge import create_knowledge_store
 from ai.shared.persistence.qdrant import create_qdrant_client
 from ai.shared.persistence.redis import create_redis_client
 from ai.shared.persistence.store import create_memory_store
-from ai.shared.resilience.cache import ToolCache, create_tool_cache
+from ai.shared.resilience.cache import create_tool_cache
 from ai.shared.resilience.circuit_breaker import CircuitBreakerRegistry
 from ai.shared.resilience.observability import LLMCallMetrics
 
@@ -71,9 +69,7 @@ class AgentBundle:
     specs: list[AgentSpec]
     ingestion_pipeline: IngestionPipeline
     retrieval_engine: RetrievalEngine
-    tool_cache: ToolCache
     circuit_breakers: CircuitBreakerRegistry
-    context_facade: ResearchContextFacade
 
 
 def build_models(
@@ -122,11 +118,11 @@ async def enter_infra(
     http = await stack.enter_async_context(
         httpx.AsyncClient(
             limits=httpx.Limits(
-                max_connections=200,
-                max_keepalive_connections=50,
-                keepalive_expiry=30.0,
+                max_connections=settings.server.http_max_connections,
+                max_keepalive_connections=settings.server.http_max_keepalive_connections,
+                keepalive_expiry=settings.server.http_keepalive_expiry_seconds,
             ),
-            timeout=15.0,
+            timeout=settings.server.http_timeout_seconds,
         )
     )
     checkpointer = await stack.enter_async_context(create_checkpointer(settings.database.postgres))
@@ -172,7 +168,6 @@ def build_agents(
     library_gateway: LibraryGateway | None = None,
     editor_gateway: EditorGateway | None = None,
     project_gateway: ProjectGateway | None = None,
-    context_facade: ResearchContextFacade | None = None,
 ) -> AgentBundle:
     """Assemble all enabled vertical-slice specialist modules and shared facades."""
     allow_remote = settings.server.app_env != AppEnvironment.TEST
@@ -198,52 +193,46 @@ def build_agents(
         http_client=infra.http,
         allow_remote=allow_remote,
     )
-    library = build_library_module(
-        llm=models.agent,
-        config=settings.library,
-        gateway=library_gateway,
-        http_client=infra.http,
-    )
     tool_cache = create_tool_cache(infra.redis)
     circuit_breakers = CircuitBreakerRegistry()
-    active_facade = context_facade or ResearchContextFacade()
     github_client = HttpGitHubArtifactClient(
         http_client=infra.http,
         circuit_breaker=circuit_breakers.get_or_create("github"),
         cache=tool_cache,
     )
-    editor = build_editor_module(
-        llm=models.agent,
-        config=settings.editor,
-        gateway=editor_gateway,
-        http_client=infra.http,
-        internal_api_key=internal_key,
-        artifact_client=github_client,
-        context_facade=active_facade,
-    )
-    project = build_project_module(
-        llm=models.agent,
-        config=settings.project,
-        gateway=project_gateway,
-        http_client=infra.http,
-        internal_api_key=internal_key,
-    )
 
     specs: list[AgentSpec] = [rag.agent_spec, web_search.agent_spec]
-    optional_modules: Sequence[tuple[bool, AgentSpec]] = (
-        (settings.library.enabled, library.agent_spec),
-        (settings.editor.enabled, editor.agent_spec),
-        (settings.project.enabled, project.agent_spec),
-    )
-    for enabled, spec in optional_modules:
-        if enabled:
-            specs.append(spec)
+    if settings.library.enabled:
+        library = build_library_module(
+            llm=models.agent,
+            config=settings.library,
+            gateway=library_gateway,
+            http_client=infra.http,
+        )
+        specs.append(library.agent_spec)
+    if settings.editor.enabled:
+        editor = build_editor_module(
+            llm=models.agent,
+            config=settings.editor,
+            gateway=editor_gateway,
+            http_client=infra.http,
+            internal_api_key=internal_key,
+            artifact_client=github_client,
+        )
+        specs.append(editor.agent_spec)
+    if settings.project.enabled:
+        project = build_project_module(
+            llm=models.agent,
+            config=settings.project,
+            gateway=project_gateway,
+            http_client=infra.http,
+            internal_api_key=internal_key,
+        )
+        specs.append(project.agent_spec)
 
     return AgentBundle(
         specs=specs,
         ingestion_pipeline=rag.ingestion_pipeline,
         retrieval_engine=rag.retrieval_engine,
-        tool_cache=tool_cache,
         circuit_breakers=circuit_breakers,
-        context_facade=active_facade,
     )

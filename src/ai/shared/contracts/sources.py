@@ -54,13 +54,6 @@ class AttachedSource(BaseModel):
             return self.file_id
         return None
 
-    @property
-    def effective_source_type(self) -> Literal["upload", "file"]:
-        """Canonical Qdrant `source_type` corresponding to `effective_source_id`."""
-        if self.source_type is not None:
-            return self.source_type
-        return "file" if self.kind in ("library", "paper") else "upload"
-
 
 def parse_attached_sources(raw: Any, *, max_items: int = 30) -> tuple[AttachedSource, ...]:
     """Parse and deduplicate `context.attached_sources` safely."""

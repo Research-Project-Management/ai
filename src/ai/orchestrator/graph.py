@@ -25,12 +25,10 @@ from ai.orchestrator.contracts import (
 from ai.orchestrator.nodes import RootGraphNodes
 from ai.orchestrator.planner import LLMSupervisorPlanner
 from ai.orchestrator.state import RootState
-from ai.shared.context.facade import ResearchContextFacade
 from ai.shared.contracts.run_control import RunUsage
 from ai.shared.llm.factory import ChatRunnable
 from ai.shared.llm.nostream import with_nostream
 from ai.shared.llm.output import extract_text
-from ai.shared.resilience.cache import ToolCache
 
 logger = logging.getLogger(__name__)
 
@@ -145,8 +143,6 @@ def build_root_graph(
     registry: AgentRegistry | None = None,
     planner: RoutePlanner | None = None,
     context_policy: ContextWindowPolicy | None = None,
-    context_facade: ResearchContextFacade | None = None,
-    router_cache: ToolCache | None = None,
     output_guards: Sequence[OutputGuard] = (),
     max_rounds: int = 3,
     checkpointer: BaseCheckpointSaver | None = None,
@@ -165,8 +161,6 @@ def build_root_graph(
     active_planner: RoutePlanner = planner or LLMSupervisorPlanner(
         router_llm or llm,
         context_policy=active_context_policy,
-        context_facade=context_facade,
-        cache=router_cache,
         max_rounds=max_rounds,
     )
 

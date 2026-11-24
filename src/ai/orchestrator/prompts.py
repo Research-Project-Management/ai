@@ -4,18 +4,50 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from ai.orchestrator.citations import CITATION_INSTRUCTIONS, format_evidence_tag
-from ai.orchestrator.context_sections import (
-    DEFAULT_CONTEXT_COMPOSER,
-    format_attached_source_line,
-)
+from ai.orchestrator.context_sections import DEFAULT_CONTEXT_COMPOSER
 from ai.orchestrator.contracts import AgentOutput
-from ai.shared.context.contracts import ContextEnvelope
 
-_format_attached_source_line = format_attached_source_line
+DIRECT_RESPOND_SYSTEM_PROMPT = (
+    "You are Flux AI Assistant, a helpful, concise workspace assistant for Flux.\n"
+    "Rules:\n"
+    "1. Always respond strictly in the same language as the user's latest message "
+    "(for example, Vietnamese if the user writes in Vietnamese). Never switch languages "
+    "mid-reply.\n"
+    "2. If asked about your identity, introduce yourself as Flux AI Assistant. "
+    "Never claim to be DeepSeek, OpenAI, Gemini, Claude, or any other third-party model "
+    "or vendor.\n"
+    "3. Keep greetings and direct answers clear, natural, and concise."
+)
 
 
-def _format_request_context_block(request_context: Mapping[str, Any] | None) -> str:
-    return DEFAULT_CONTEXT_COMPOSER.render(request_context)
+def format_user_profile_line(request_context: Mapping[str, Any] | None) -> str:
+    """Format signed-in user profile metadata if provided by the backend."""
+    if not isinstance(request_context, Mapping):
+        return ""
+    raw = request_context.get("user_profile")
+    if not isinstance(raw, Mapping):
+        return ""
+    name = str(raw.get("name") or "").strip()
+    email = str(raw.get("email") or "").strip()
+    institution = str(raw.get("institution") or "").strip()
+    parts: list[str] = []
+    if name:
+        parts.append(f"Name: {name}")
+    if email:
+        parts.append(f"Email: {email}")
+    if institution:
+        parts.append(f"Institution: {institution}")
+    if not parts:
+        return ""
+    return "Signed-in user profile: " + " | ".join(parts)
+
+
+def build_direct_system_prompt(request_context: Mapping[str, Any] | None = None) -> str:
+    """Build Static-First direct-response system prompt with optional signed-in user identity."""
+    user_line = format_user_profile_line(request_context)
+    if not user_line:
+        return DIRECT_RESPOND_SYSTEM_PROMPT
+    return f"{DIRECT_RESPOND_SYSTEM_PROMPT}\n\n{user_line}"
 
 
 def build_supervisor_prompt(
@@ -26,7 +58,6 @@ def build_supervisor_prompt(
     plan_summary: str = "",
     prior_outputs: Sequence[AgentOutput] = (),
     request_context: Mapping[str, Any] | None = None,
-    context_envelope: ContextEnvelope | None = None,
 ) -> str:
     """Build the Supervisor prompt ordered Static-First, Volatile-Last for KV Prefix Caching."""
     static_prefix = (
@@ -43,8 +74,10 @@ def build_supervisor_prompt(
         '"plan_summary": "<concise multi-step plan if needs_followup is true>", '
         '"reasoning": "<brief reason>"}\n\n'
         "## Rules\n"
-        "1. On round 1 with no specialist needed and no attached workspace/external cues requiring "
-        'retrieval, choose "mode": "direct" (empty targets).\n'
+        '1. On round 1, choose "mode": "direct" (empty targets) whenever the user\'s latest '
+        "request can be satisfied without reading attached/workspace documents, querying workspace "
+        "state, or searching external sources — regardless of whether papers or files are "
+        "currently open or attached.\n"
         '2. For a single-step or independent parallel task, choose "mode": "delegate" with '
         '"needs_followup": false. When a question asks to compare or combine internal workspace '
         "documents (`rag_agent`) with external web/scholarly literature (`web_search_agent`), "
@@ -58,19 +91,16 @@ def build_supervisor_prompt(
         "6. Preserve the user's language in each target instruction.\n"
         "7. Creating, initializing, writing, or editing a new Page/article/paper (e.g., `tạo bài viết`, "
         "`khởi tạo bài viết`, `tạo page`, `create page`) belongs to `editor_agent` — NEVER delegate "
-        "article/page creation to `project_agent` as a Kanban work item."
+        "article/page creation to `project_agent` as a Kanban work item.\n"
+        "8. Do NOT invoke `web_search_agent` for questions strictly about an internal workspace "
+        "project, its internal metrics, ADRs, postmortems, or team ownership unless the user "
+        "explicitly asks for external public/web/scholarly sources."
     )
 
     volatile_parts: list[str] = []
-    if context_envelope and context_envelope.primacy_text.strip():
-        volatile_parts.append(context_envelope.primacy_text.strip())
-
-    context_block = _format_request_context_block(request_context).strip()
+    context_block = DEFAULT_CONTEXT_COMPOSER.render(request_context).strip()
     if context_block:
         volatile_parts.append(context_block)
-
-    if context_envelope and context_envelope.middle_text.strip():
-        volatile_parts.append(context_envelope.middle_text.strip())
 
     if prior_outputs:
         progress_lines: list[str] = [f"## Progress (Round {round_count}/{max_rounds})"]

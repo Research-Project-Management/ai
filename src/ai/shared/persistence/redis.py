@@ -27,8 +27,8 @@ async def create_redis_client(config: RedisConfig) -> AsyncIterator[Redis | None
     client: Redis = Redis.from_url(
         config.redis_url.get_secret_value(),
         decode_responses=True,
-        socket_connect_timeout=1.5,
-        socket_timeout=2.0,
+        socket_connect_timeout=config.redis_socket_connect_timeout,
+        socket_timeout=config.redis_socket_timeout,
     )
     try:
         yield client

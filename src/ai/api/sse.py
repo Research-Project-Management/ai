@@ -8,22 +8,17 @@ from typing import Any
 from langchain_core.runnables import RunnableConfig
 from langgraph.graph.state import CompiledStateGraph
 
+from ai.api.dependencies import bind_run_context
 from ai.api.sse_translator import (
     SseTranslator,
     format_sse,
     serialize_artifacts,
     serialize_citations,
 )
-from ai.shared.contracts.auth import bind_delegation_token
 from ai.shared.contracts.run_control import RunCancellationRegistry
-from ai.shared.llm.factory import LLMOverride, bind_llm_override
-from ai.shared.resilience.mutations import (
-    TurnMutationJournal,
-    bind_turn_journal,
-    build_revert_artifact,
-)
+from ai.shared.llm.factory import LLMOverride
+from ai.shared.resilience.mutations import JournalStore, build_revert_artifact
 from ai.shared.resilience.observability import TokenBudget, ToolExecutionMetrics
-from ai.shared.resilience.tool_runner import bind_tool_metrics
 
 logger = logging.getLogger(__name__)
 
@@ -42,47 +37,52 @@ async def stream_graph_events(
     space_id: str = "",
     delegation_token: str = "",
     tool_metrics: ToolExecutionMetrics | None = None,
-    mutation_journal: TurnMutationJournal | None = None,
+    mutation_journal: JournalStore | None = None,
 ) -> AsyncIterator[str]:
     """Stream orchestration lifecycle, cancellation, HITL interrupts, and token usage."""
     started = time.perf_counter()
+    last_cancel_check = 0.0
+    cancel_check_interval_s = 0.3
     yield format_sse("run.started", {"trace_id": trace_id, "chat_id": chat_id})
     translator = SseTranslator(specialist_names=specialist_names)
 
-    with (
-        bind_delegation_token(delegation_token),
-        bind_llm_override(llm_override),
-        bind_tool_metrics(tool_metrics),
-        bind_turn_journal(mutation_journal, space_id=space_id, trace_id=trace_id),
+    with bind_run_context(
+        delegation_token=delegation_token,
+        llm_override=llm_override,
+        tool_metrics=tool_metrics,
+        mutation_journal=mutation_journal,
+        space_id=space_id,
+        trace_id=trace_id,
     ):
         try:
             async for event in graph.astream_events(graph_input, config=run_config, version="v2"):
-                if (
-                    cancel_registry is not None
-                    and space_id
-                    and await cancel_registry.is_cancelled(space_id, chat_id)
-                ):
-                    await cancel_registry.clear(space_id, chat_id)
-                    elapsed_ms = (time.perf_counter() - started) * 1000.0
-                    final_usage = translator.usage.with_latency(elapsed_ms)
-                    if token_budget is not None and space_id:
-                        await token_budget.record(space_id, final_usage)
-                    revert_art = build_revert_artifact(
-                        mutation_journal, space_id=space_id, trace_id=trace_id
-                    )
-                    cancel_artifacts = (
-                        {"revertible_turn": revert_art} if revert_art is not None else {}
-                    )
-                    yield format_sse(
-                        "run.cancelled",
-                        {
-                            "trace_id": trace_id,
-                            "chat_id": chat_id,
-                            **({"artifacts": cancel_artifacts} if cancel_artifacts else {}),
-                            "usage": final_usage.model_dump(),
-                        },
-                    )
-                    return
+                if cancel_registry is not None and space_id:
+                    now = time.monotonic()
+                    is_token_event = event.get("event") == "on_chat_model_stream"
+                    if not is_token_event or (now - last_cancel_check) >= cancel_check_interval_s:
+                        last_cancel_check = now
+                        if await cancel_registry.is_cancelled(space_id, chat_id):
+                            await cancel_registry.clear(space_id, chat_id)
+                            elapsed_ms = (time.perf_counter() - started) * 1000.0
+                            final_usage = translator.usage.with_latency(elapsed_ms)
+                            if token_budget is not None and space_id:
+                                await token_budget.record(space_id, final_usage)
+                            revert_art = build_revert_artifact(
+                                mutation_journal, space_id=space_id, trace_id=trace_id
+                            )
+                            cancel_artifacts = (
+                                {"revertible_turn": revert_art} if revert_art is not None else {}
+                            )
+                            yield format_sse(
+                                "run.cancelled",
+                                {
+                                    "trace_id": trace_id,
+                                    "chat_id": chat_id,
+                                    **({"artifacts": cancel_artifacts} if cancel_artifacts else {}),
+                                    "usage": final_usage.model_dump(),
+                                },
+                            )
+                            return
 
                 for frame in translator.translate(event):
                     yield frame

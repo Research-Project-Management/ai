@@ -19,6 +19,8 @@ class IngestionConfig(EnvConfigBase):
     max_concurrency: int = Field(default=2, ge=1, le=16)
     max_queue_size: int = Field(default=50, ge=1, le=1000)
     job_ttl_seconds: int = Field(default=86400, ge=60, le=604800)
+    lazy_max_per_turn: int = Field(default=8, ge=1, le=32)
+    lazy_per_file_timeout_seconds: float = Field(default=45.0, gt=0.0, le=300.0)
 
     @model_validator(mode="after")
     def _validate_overlap_window(self) -> Self:
@@ -41,6 +43,8 @@ class RerankConfig(EnvConfigBase):
     candidate_pool_size: int = Field(default=24, ge=5, le=100)
     top_k: int = Field(default=6, ge=1, le=30)
     min_score: float = Field(default=0.05, ge=0.0, le=1.0)
+    min_chunks_per_scoped_doc: int = Field(default=2, ge=1, le=10)
+    max_multi_doc_top_k: int = Field(default=16, ge=2, le=64)
 
     @property
     def is_remote_configured(self) -> bool:

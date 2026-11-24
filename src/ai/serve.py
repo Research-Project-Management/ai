@@ -9,6 +9,8 @@ from pathlib import Path
 
 import uvicorn
 
+from ai.shared.config.server import ServerConfig
+
 logger = logging.getLogger(__name__)
 
 _CPU_MAX_PATH = Path("/sys/fs/cgroup/cpu.max")
@@ -132,8 +134,9 @@ def _parse_optional_positive_int(raw: str | None) -> int | None:
 def main() -> None:
     """Launch uvicorn with hardware-adaptive concurrency and proxy header support."""
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
-    host = (os.getenv("HOST") or "0.0.0.0").strip() or "0.0.0.0"
-    port = int((os.getenv("PORT") or "18420").strip() or "18420")
+    server_cfg = ServerConfig()
+    host = server_cfg.host
+    port = server_cfg.port
     override = _parse_optional_positive_int(os.getenv("UVICORN_WORKERS"))
 
     cpu_count = detect_cpu_count()

@@ -47,12 +47,14 @@ class AttachedSourcesSection:
             lines.append("- Attached context sources:")
             lines.extend(format_attached_source_line(src) for src in attached)
             lines.append(
-                "  Routing guidance: Use `rag_agent` for full-text content on uploads or library "
-                "papers marked `full-text indexed` / `PDF auto-indexable`. Use `library_agent` "
-                "(passing exact `item_id`) for `metadata/notes only` papers (`get_item`), "
-                "citations, notes, tags, or collections. For downstream tasks based on an attached "
-                "source (`project_agent` / `editor_agent`), read the source first with "
-                '"needs_followup": true, then act on the next round.'
+                "  Routing guidance: These sources are available resources, not mandatory "
+                "triggers. Only delegate when answering the user's request actually depends on "
+                "their content or metadata: use `rag_agent` for full-text content on uploads or "
+                "library papers marked `full-text indexed` / `PDF auto-indexable`, and "
+                "`library_agent` (passing exact `item_id`) for `metadata/notes only` papers "
+                "(`get_item`), citations, notes, tags, or collections. For downstream tasks "
+                "based on an attached source (`project_agent` / `editor_agent`), read the source "
+                'first with "needs_followup": true, then act on the next round.'
             )
 
         covered_ids = {
@@ -71,8 +73,9 @@ class AttachedSourcesSection:
             if extra_docs:
                 joined = ", ".join(extra_docs)
                 lines.append(
-                    f"- Attached workspace document_ids: [{joined}] "
-                    "(Use `rag_agent` when answering from or inspecting these uploaded workspace documents.)"
+                    f"- Attached space document_ids: [{joined}] "
+                    "(Available uploaded space documents — delegate to `rag_agent` only when "
+                    "the request depends on reading or inspecting their content.)"
                 )
         return lines
 
@@ -109,7 +112,7 @@ class EditorSection:
         has_compile_errors = bool(request_context.get("compile_errors"))
 
         if page_id:
-            lines.append(f"- Active workspace page_id: {page_id}")
+            lines.append(f"- Active space page_id: {page_id}")
         if filename or has_file_content or has_selection or has_compile_errors or page_id:
             editor_cues: list[str] = []
             if filename:
@@ -176,8 +179,8 @@ class ExternalScopeSection:
         ]
 
 
-class WorkspaceMemorySection:
-    """Renders persistent per-workspace user preferences stored in memory store."""
+class SpaceMemorySection:
+    """Renders persistent per-space user preferences stored in memory store."""
 
     def render(self, request_context: Mapping[str, Any]) -> list[str]:
         ws_memory = request_context.get("workspace_memory")
@@ -188,7 +191,7 @@ class WorkspaceMemorySection:
         ]
         if not mem_parts:
             return []
-        return [f"- Persistent workspace preferences: {'; '.join(mem_parts)}"]
+        return [f"- Persistent space preferences: {'; '.join(mem_parts)}"]
 
 
 class ContextPromptComposer:
@@ -214,7 +217,7 @@ DEFAULT_CONTEXT_SECTIONS: tuple[ContextSection, ...] = (
     ProjectSection(),
     EditorSection(),
     ExternalScopeSection(),
-    WorkspaceMemorySection(),
+    SpaceMemorySection(),
 )
 DEFAULT_CONTEXT_COMPOSER = ContextPromptComposer(DEFAULT_CONTEXT_SECTIONS)
 
@@ -227,6 +230,6 @@ __all__ = [
     "EditorSection",
     "ExternalScopeSection",
     "ProjectSection",
-    "WorkspaceMemorySection",
+    "SpaceMemorySection",
     "format_attached_source_line",
 ]

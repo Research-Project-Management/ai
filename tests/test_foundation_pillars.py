@@ -127,9 +127,10 @@ def test_stateless_vs_stateful_execution_and_thread_lifecycle() -> None:
         assert stateless_res.status_code == 200
         stateless_body = stateless_res.json()
         assert stateless_body["stateless"] is True
-        assert stateless_body["usage"]["input_tokens"] == 12
-        assert stateless_body["usage"]["output_tokens"] == 8
-        assert stateless_body["usage"]["total_tokens"] == 20
+        # Usage accumulates both the supervisor router call (12/8/20) and direct response (12/8/20).
+        assert stateless_body["usage"]["input_tokens"] == 24
+        assert stateless_body["usage"]["output_tokens"] == 16
+        assert stateless_body["usage"]["total_tokens"] == 40
         assert stateless_body["usage"]["latency_ms"] >= 0.0
 
         state_ephemeral = client.get("/threads/ephemeral-1/state?space_id=s1", headers=headers)

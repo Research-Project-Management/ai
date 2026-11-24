@@ -2,6 +2,8 @@
 
 import hmac
 import uuid
+from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import Annotated
 
 from fastapi import Depends, Header, HTTPException, Request, status
@@ -15,13 +17,16 @@ from ai.agents.rag.retrieval.engine import RetrievalEngine
 from ai.api.schemas import ChatRequest, ResumeRequest
 from ai.orchestrator.contracts import AgentRegistry, InputGuard
 from ai.shared.config.server import ServerConfig
+from ai.shared.contracts.auth import bind_delegation_token
 from ai.shared.contracts.context import SpaceContext
 from ai.shared.contracts.health import HealthProbe
 from ai.shared.contracts.knowledge import KnowledgeStore
 from ai.shared.contracts.rate_limit import RateLimiter, RateLimitResult
 from ai.shared.contracts.run_control import FeedbackSink, RunCancellationRegistry
-from ai.shared.resilience.mutations import TurnMutationJournal
-from ai.shared.resilience.observability import TokenBudget, TokenQuotaStatus
+from ai.shared.llm.factory import LLMOverride, bind_llm_override
+from ai.shared.resilience.mutations import JournalStore, bind_turn_journal
+from ai.shared.resilience.observability import TokenBudget, TokenQuotaStatus, ToolExecutionMetrics
+from ai.shared.resilience.tool_runner import bind_tool_metrics
 
 
 def get_server_config(request: Request) -> ServerConfig:
@@ -64,7 +69,7 @@ def get_feedback_sink(request: Request) -> FeedbackSink:
     return request.app.state.feedback_sink
 
 
-def get_mutation_journal(request: Request) -> TurnMutationJournal:
+def get_mutation_journal(request: Request) -> JournalStore:
     """Inject per-turn mutation journal from app state."""
     return request.app.state.mutation_journal
 
@@ -114,14 +119,41 @@ def verify_internal_key(
         )
 
 
+def extract_bearer_token(request: Request) -> str:
+    """Extract the bearer token from the request's `Authorization` header."""
+    auth_header = request.headers.get("authorization", "").strip()
+    if auth_header[:7].lower() == "bearer ":
+        return auth_header[7:].strip()
+    return ""
+
+
+@contextmanager
+def bind_run_context(
+    *,
+    delegation_token: str = "",
+    llm_override: LLMOverride | None = None,
+    tool_metrics: ToolExecutionMetrics | None = None,
+    mutation_journal: JournalStore | None = None,
+    space_id: str = "",
+    trace_id: str = "",
+) -> Iterator[None]:
+    """Bind per-run ContextVars (delegation auth, BYOK override, tool metrics, mutation journal)."""
+    with (
+        bind_delegation_token(delegation_token),
+        bind_llm_override(llm_override),
+        bind_tool_metrics(tool_metrics),
+        bind_turn_journal(mutation_journal, space_id=space_id, trace_id=trace_id),
+    ):
+        yield
+
+
 def build_space_context(
     payload: ChatRequest | ResumeRequest,
     raw_request: Request,
     x_trace_id: str | None = None,
 ) -> SpaceContext:
     """Extract verified Flux space scope and masked delegation token."""
-    auth_header = raw_request.headers.get("authorization", "")
-    token = auth_header[7:].strip() if auth_header[:7].lower() == "bearer " else ""
+    token = extract_bearer_token(raw_request)
     trace_id = (x_trace_id or "").strip() or uuid.uuid4().hex[:12]
     raw_chat_id = (
         (payload.chat_id or "").strip()

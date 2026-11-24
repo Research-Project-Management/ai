@@ -11,6 +11,7 @@ from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import Command
 
 from ai.api.dependencies import (
+    bind_run_context,
     build_space_context,
     enforce_space_rate_limit,
     enforce_space_token_budget,
@@ -24,19 +25,13 @@ from ai.api.dependencies import (
 from ai.api.schemas import ChatMessageInput, ChatRequest, ChatResponse, ResumeRequest
 from ai.api.sse import serialize_artifacts, serialize_citations, stream_graph_events
 from ai.orchestrator.contracts import InputGuard, InputGuardViolation
-from ai.shared.contracts.auth import bind_delegation_token
 from ai.shared.contracts.context import SpaceContext
 from ai.shared.contracts.rate_limit import RateLimiter, RateLimitResult
 from ai.shared.contracts.run_control import RunCancellationRegistry, RunUsage
 from ai.shared.llm.catalog import resolve_catalog_override
-from ai.shared.llm.factory import LLMOverride, bind_llm_override, parse_llm_override
-from ai.shared.resilience.mutations import (
-    TurnMutationJournal,
-    bind_turn_journal,
-    build_revert_artifact,
-)
+from ai.shared.llm.factory import LLMOverride, parse_llm_override
+from ai.shared.resilience.mutations import JournalStore, build_revert_artifact
 from ai.shared.resilience.observability import TokenBudget
-from ai.shared.resilience.tool_runner import bind_tool_metrics
 
 router = APIRouter(tags=["chat"], dependencies=[Depends(verify_internal_key)])
 
@@ -130,6 +125,13 @@ async def _prepare_request(
     return space, limit_result, _build_run_config(space), llm_override
 
 
+def _effective_token_budget(
+    budget: TokenBudget,
+    override: LLMOverride | None,
+) -> TokenBudget | None:
+    return None if (override is not None and override.is_byok) else budget
+
+
 def _sse_headers(limit_result: RateLimitResult) -> dict[str, str]:
     return {
         "Cache-Control": "no-cache",
@@ -160,7 +162,7 @@ async def _build_sync_response(
     stateless: bool,
     space_id: str,
     token_budget: TokenBudget | None,
-    mutation_journal: TurnMutationJournal | None = None,
+    mutation_journal: JournalStore | None = None,
 ) -> ChatResponse:
     usage = _extract_response_usage(result, started)
     if token_budget is not None:
@@ -228,7 +230,7 @@ async def chat_stream(
             trace_id=space.trace_id,
             chat_id=space.chat_id,
             cancel_registry=cancel_registry,
-            token_budget=None if llm_override is not None else token_budget,
+            token_budget=_effective_token_budget(token_budget, llm_override),
             llm_override=llm_override,
             space_id=space.space_id,
             delegation_token=space.delegation_token.get_secret_value(),
@@ -264,11 +266,13 @@ async def chat_sync(
     _apply_headers(response, rate_limit_headers(limit_result))
     graph = _select_graph(raw_request, stateless=is_stateless)
     journal = getattr(raw_request.app.state, "mutation_journal", None)
-    with (
-        bind_delegation_token(space.delegation_token.get_secret_value()),
-        bind_llm_override(llm_override),
-        bind_tool_metrics(raw_request.app.state.tool_metrics),
-        bind_turn_journal(journal, space_id=space.space_id, trace_id=space.trace_id),
+    with bind_run_context(
+        delegation_token=space.delegation_token.get_secret_value(),
+        llm_override=llm_override,
+        tool_metrics=raw_request.app.state.tool_metrics,
+        mutation_journal=journal,
+        space_id=space.space_id,
+        trace_id=space.trace_id,
     ):
         result = await graph.ainvoke(
             _build_chat_graph_input(payload, space, lc_messages),
@@ -282,7 +286,7 @@ async def chat_sync(
         started=started,
         stateless=is_stateless,
         space_id=space.space_id,
-        token_budget=None if llm_override is not None else token_budget,
+        token_budget=_effective_token_budget(token_budget, llm_override),
         mutation_journal=journal,
     )
 
@@ -312,7 +316,7 @@ async def chat_resume_stream(
             trace_id=space.trace_id,
             chat_id=space.chat_id,
             cancel_registry=cancel_registry,
-            token_budget=None if llm_override is not None else token_budget,
+            token_budget=_effective_token_budget(token_budget, llm_override),
             llm_override=llm_override,
             space_id=space.space_id,
             delegation_token=space.delegation_token.get_secret_value(),
@@ -341,11 +345,13 @@ async def chat_resume_sync(
     _apply_headers(response, rate_limit_headers(limit_result))
     graph: CompiledStateGraph = raw_request.app.state.root_graph
     journal = getattr(raw_request.app.state, "mutation_journal", None)
-    with (
-        bind_delegation_token(space.delegation_token.get_secret_value()),
-        bind_llm_override(llm_override),
-        bind_tool_metrics(raw_request.app.state.tool_metrics),
-        bind_turn_journal(journal, space_id=space.space_id, trace_id=space.trace_id),
+    with bind_run_context(
+        delegation_token=space.delegation_token.get_secret_value(),
+        llm_override=llm_override,
+        tool_metrics=raw_request.app.state.tool_metrics,
+        mutation_journal=journal,
+        space_id=space.space_id,
+        trace_id=space.trace_id,
     ):
         result = await graph.ainvoke(Command(resume=payload.decision), config=run_config)
     return await _build_sync_response(
@@ -356,6 +362,6 @@ async def chat_resume_sync(
         started=started,
         stateless=False,
         space_id=space.space_id,
-        token_budget=None if llm_override is not None else token_budget,
+        token_budget=_effective_token_budget(token_budget, llm_override),
         mutation_journal=journal,
     )

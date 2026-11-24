@@ -109,7 +109,7 @@ def select_indexed_citations(
         return []
 
     cited_indices = extract_cited_indices(answer_text, max_index=len(candidates))
-    if cited_indices:
-        return [candidates[idx - 1].model_copy(update={"index": idx}) for idx in cited_indices]
+    if not cited_indices:
+        return []
 
-    return [cite.model_copy(update={"index": idx}) for idx, cite in enumerate(candidates, start=1)]
+    return [candidates[idx - 1].model_copy(update={"index": idx}) for idx in cited_indices]

@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
+import json
+import logging
+import os
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, SecretStr
 
 from ai.shared.config.llm import LLMConfig
 from ai.shared.llm.factory import LLMOverride
+
+logger = logging.getLogger(__name__)
 
 ModelTier = Literal["auto", "fast", "balanced", "pro"]
 
@@ -28,7 +33,7 @@ class ModelCatalogEntry(BaseModel):
 DEFAULT_CATALOG: tuple[ModelCatalogEntry, ...] = (
     ModelCatalogEntry(
         id="auto",
-        label="Auto (Tối ưu)",
+        label="Auto",
         provider="Flux Gateway",
         tier="auto",
         description="Tự động chọn model tối ưu theo từng bước",
@@ -64,14 +69,24 @@ DEFAULT_CATALOG: tuple[ModelCatalogEntry, ...] = (
     ),
 )
 
-_SELECTABLE_IDS: frozenset[str] = frozenset(
-    entry.id for entry in DEFAULT_CATALOG if entry.id != "auto"
-)
+
+def _load_active_catalog() -> tuple[ModelCatalogEntry, ...]:
+    raw = (os.getenv("LLM_MODEL_CATALOG_JSON") or "").strip()
+    if not raw:
+        return DEFAULT_CATALOG
+    try:
+        parsed = json.loads(raw)
+        if not isinstance(parsed, list) or not parsed:
+            raise ValueError("LLM_MODEL_CATALOG_JSON must be a non-empty JSON array")
+        return tuple(ModelCatalogEntry.model_validate(item) for item in parsed)
+    except Exception as exc:  # noqa: BLE001 - fail-open to default catalog
+        logger.warning("Invalid LLM_MODEL_CATALOG_JSON, falling back to DEFAULT_CATALOG: %s", exc)
+        return DEFAULT_CATALOG
 
 
 def list_model_catalog() -> list[ModelCatalogEntry]:
     """Return ordered list of selectable models exposed to backend/frontend."""
-    return list(DEFAULT_CATALOG)
+    return list(_load_active_catalog())
 
 
 def resolve_catalog_override(
@@ -82,7 +97,8 @@ def resolve_catalog_override(
     if not isinstance(raw_context, dict):
         return None
     model_id = str(raw_context.get("model_id") or "").strip()
-    if not model_id or model_id == "auto" or model_id not in _SELECTABLE_IDS:
+    selectable_ids = {entry.id for entry in _load_active_catalog() if entry.id != "auto"}
+    if not model_id or model_id == "auto" or model_id not in selectable_ids:
         return None
     raw_key = config.api_key.get_secret_value().strip()
     if not raw_key:
@@ -91,4 +107,5 @@ def resolve_catalog_override(
         api_key=SecretStr(raw_key),
         model=model_id,
         base_url=config.base_url.strip(),
+        is_byok=False,
     )

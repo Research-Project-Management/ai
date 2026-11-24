@@ -302,23 +302,6 @@ def test_latex_escape_is_math_aware() -> None:
     assert _escape_latex_text("") == ""
 
 
-def test_context_facade_tolerates_non_string_task_kind() -> None:
-    from ai.shared.context.contracts import EntityDomain, GraphNode
-    from ai.shared.context.facade import ResearchContextFacade
-
-    facade = ResearchContextFacade()
-    facade.register_node(
-        GraphNode(id="g1", domain=EntityDomain.GOVERNANCE, label="T1", attributes={"kind": None})
-    )
-    facade.register_node(
-        GraphNode(id="g2", domain=EntityDomain.GOVERNANCE, label="T2", attributes={"kind": 7})
-    )
-    from ai.shared.context.contracts import ViewportFocus
-
-    envelope = facade.assemble_context(ViewportFocus(), "status")
-    assert envelope.full_prompt
-
-
 def test_turn_helpers_handle_content_blocks_and_instruction_priority() -> None:
     from langchain_core.messages import HumanMessage
 
@@ -583,7 +566,7 @@ async def test_summarize_tool_input_and_run_tool_batch_forwards_summary() -> Non
 async def test_turn_mutation_journal_lifo_revert_and_endpoint() -> None:
     from ai.shared.contracts.auth import bind_delegation_token
     from ai.shared.resilience.mutations import (
-        InMemoryTurnMutationJournal,
+        MemoryJournal,
         MutationRecord,
         MutationRevertError,
         bind_turn_journal,
@@ -592,7 +575,7 @@ async def test_turn_mutation_journal_lifo_revert_and_endpoint() -> None:
         revert_turn_mutations,
     )
 
-    journal = InMemoryTurnMutationJournal(max_turns=2)
+    journal = MemoryJournal(max_turns=2)
     with bind_turn_journal(journal, space_id="s1", trace_id="t-1"):
         record_turn_mutation(
             MutationRecord(
@@ -657,7 +640,7 @@ async def test_turn_mutation_journal_lifo_revert_and_endpoint() -> None:
             return httpx.Response(404, json={"message": "Not found"})
         return httpx.Response(200, json={"ok": True})
 
-    fail_journal = InMemoryTurnMutationJournal()
+    fail_journal = MemoryJournal()
     with bind_turn_journal(fail_journal, space_id="s1", trace_id="t-mix"):
         record_turn_mutation(
             MutationRecord(

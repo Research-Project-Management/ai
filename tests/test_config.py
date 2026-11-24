@@ -243,7 +243,6 @@ def test_embedding_config_fallback_and_alias_security() -> None:
     )
     assert "sk-emb-fallback-secret" not in f"{cfg!r} {cfg!s}"
     assert cfg.effective_fallback_model == "bge-m3"
-    assert cfg.effective_target_name == "kb_active"
     assert cfg.should_send_dimensions() is False
     assert cfg.should_send_dimensions("text-embedding-3-small") is True
     assert cfg.effective_api_key(LLMConfig(api_key=SecretStr("sk-llm-only"))) == ""

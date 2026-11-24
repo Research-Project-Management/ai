@@ -1,0 +1,166 @@
+[
+  {
+    "id": "IE-01",
+    "axis": "IE",
+    "axis_name": "Information Extraction",
+    "space_id": "eval-longmem-12m",
+    "prompt": "Theo tài liệu kiến trúc ban đầu ở Tháng 3 của dự án Helios-AI, hệ thống sử dụng vector database nào, embedding model gì và kích thước vector bao nhiêu chiều?",
+    "required_all": [
+      ["qdrant"],
+      ["nomic-embed-text"],
+      ["768"]
+    ],
+    "forbidden_any": [],
+    "require_citations": true,
+    "expect_abstention": false,
+    "check_search_zero": false
+  },
+  {
+    "id": "IE-02",
+    "axis": "IE",
+    "axis_name": "Information Extraction",
+    "space_id": "eval-longmem-12m",
+    "prompt": "Trong báo cáo sự cố Postmortem #INC-064 của dự án Helios-AI, RAM của pod AI đã tăng vọt lên mức bao nhiêu GB và exit code là gì?",
+    "required_all": [
+      ["14.2", "14,2"],
+      ["137"]
+    ],
+    "forbidden_any": [],
+    "require_citations": true,
+    "expect_abstention": false,
+    "check_search_zero": false
+  },
+  {
+    "id": "MSR-01",
+    "axis": "MSR",
+    "axis_name": "Multi-Session Reasoning",
+    "space_id": "eval-longmem-12m",
+    "prompt": "Tổng hợp xu hướng độ chính xác RAG và chi phí LLM hàng tháng của dự án Helios-AI qua cả 4 mốc Tháng 3, Tháng 6, Tháng 9 và Tháng 12 kèm trích dẫn nguồn.",
+    "required_all": [
+      ["71.4", "71,4"],
+      ["82.1", "82,1"],
+      ["88.6", "88,6"],
+      ["91.2", "91,2"],
+      ["120"],
+      ["145"],
+      ["85"],
+      ["78"]
+    ],
+    "forbidden_any": [],
+    "require_citations": true,
+    "expect_abstention": false,
+    "check_search_zero": false
+  },
+  {
+    "id": "MSR-02",
+    "axis": "MSR",
+    "axis_name": "Multi-Session Reasoning",
+    "space_id": "eval-longmem-12m",
+    "prompt": "Trong các tài liệu của dự án Helios-AI, ưu tiên số 1 trong lộ trình Q4 (Tháng 9) về lưu trữ hội thoại là gì và đến báo cáo tổng kết Tháng 12 tính năng đó đã đạt trạng thái gì?",
+    "required_all": [
+      ["asyncpostgressaver", "postgres checkpointing", "durable postgres"],
+      ["live in production", "hoạt động", "triển khai", "hoàn thành", "completed", "production"]
+    ],
+    "forbidden_any": [],
+    "require_citations": true,
+    "expect_abstention": false,
+    "check_search_zero": false
+  },
+  {
+    "id": "TR-01",
+    "axis": "TR",
+    "axis_name": "Temporal Reasoning",
+    "space_id": "eval-longmem-12m",
+    "prompt": "Dựa trên toàn bộ tài liệu kiến trúc và quyết định của dự án Helios-AI, hãy trình bày đầy đủ trình tự thay đổi cơ chế xử lý file PDF lớn và giá trị max_concurrency từ Tháng 3, qua Tháng 6 đến Tháng 12, kèm lý do mỗi lần đổi.",
+    "required_all": [
+      ["8"],
+      ["2"],
+      ["4"],
+      ["oom", "inc-064", "14.2"],
+      ["adr-019", "4 gb", "4gb", "worker"]
+    ],
+    "forbidden_any": [],
+    "require_citations": true,
+    "expect_abstention": false,
+    "check_search_zero": false
+  },
+  {
+    "id": "TR-02",
+    "axis": "TR",
+    "axis_name": "Temporal Reasoning",
+    "space_id": "eval-longmem-12m",
+    "prompt": "Trước khi sự cố #INC-064 xảy ra ở Tháng 6, Helios-AI ingest PDF theo chế độ đồng bộ hay bất đồng bộ và tại sao sau sự cố đó lại chuyển sang 202 Accepted?",
+    "required_all": [
+      ["đồng bộ", "synchronous"],
+      ["202"],
+      ["oom", "14.2", "tràn ram", "memory"]
+    ],
+    "forbidden_any": [],
+    "require_citations": true,
+    "expect_abstention": false,
+    "check_search_zero": false
+  },
+  {
+    "id": "KU-01",
+    "axis": "KU",
+    "axis_name": "Knowledge Updates",
+    "space_id": "eval-longmem-12m",
+    "prompt": "Tính đến tài liệu cập nhật mới nhất (Tháng 12) của dự án Helios-AI, giá trị max_concurrency đang áp dụng cho ingestion PDF là bao nhiêu và dựa trên quyết định nào?",
+    "required_all": [
+      [
+        "max_concurrency = 4",
+        "max_concurrency là 4",
+        "max_concurrency: 4",
+        "là **4**",
+        "mức 4",
+        "lên 4",
+        "lên **4**",
+        "bằng 4"
+      ],
+      ["adr-019"]
+    ],
+    "forbidden_any": [],
+    "require_citations": true,
+    "expect_abstention": false,
+    "check_search_zero": false
+  },
+  {
+    "id": "KU-02",
+    "axis": "KU",
+    "axis_name": "Knowledge Updates",
+    "space_id": "eval-longmem-12m",
+    "prompt": "Theo tài liệu cập nhật nhân sự mới nhất của dự án Helios-AI, hiện tại ai trực tiếp phụ trách Citation Viewer UI và Trang đang giữ vai trò gì?",
+    "required_all": [
+      ["khánh", "khanh"],
+      ["staff frontend architect"]
+    ],
+    "forbidden_any": [],
+    "require_citations": true,
+    "expect_abstention": false,
+    "check_search_zero": false
+  },
+  {
+    "id": "ABS-01",
+    "axis": "ABS",
+    "axis_name": "Abstention",
+    "space_id": "eval-longmem-12m",
+    "prompt": "Mức lương hàng tháng của Minh (PM) và Khánh trong dự án Helios-AI là bao nhiêu?",
+    "required_all": [],
+    "forbidden_any": [],
+    "require_citations": false,
+    "expect_abstention": true,
+    "check_search_zero": false
+  },
+  {
+    "id": "ABS-02",
+    "axis": "ABS",
+    "axis_name": "Abstention",
+    "space_id": "eval-longmem-other",
+    "prompt": "Dự án Helios-AI đạt RAG accuracy Tháng 12 là bao nhiêu phần trăm và đang dùng max_concurrency mấy?",
+    "required_all": [],
+    "forbidden_any": ["91.2", "88.6", "adr-019", "inc-064"],
+    "require_citations": false,
+    "expect_abstention": true,
+    "check_search_zero": true
+  }
+]

@@ -6,6 +6,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 
 from ai.agents.rag.ingestion.contracts import IngestDocumentRequest
+from ai.agents.rag.ingestion.digest import upsert_timeline_digest
 from ai.agents.rag.ingestion.jobs import (
     IngestionJobRecord,
     IngestionJobRunner,
@@ -28,6 +29,8 @@ from ai.api.schemas import (
     KnowledgeIngestResponse,
     KnowledgeSearchRequest,
     KnowledgeSearchResponse,
+    KnowledgeTimelineDigestRequest,
+    KnowledgeTimelineDigestResponse,
     KnowledgeUpsertRequest,
     KnowledgeUpsertResponse,
 )
@@ -234,6 +237,37 @@ async def delete_knowledge_source(
         deleted=deleted,
         source_type=source_type,
         source_id=source_id,
+    )
+
+
+@router.post("/knowledge/timeline-digest", response_model=KnowledgeTimelineDigestResponse)
+async def create_timeline_digest(
+    payload: KnowledgeTimelineDigestRequest,
+    store: Annotated[KnowledgeStore, Depends(get_knowledge_store)],
+    limiter: Annotated[RateLimiter, Depends(get_rate_limiter)],
+) -> KnowledgeTimelineDigestResponse:
+    """Compile chronological project events into a CoALA episodic timeline digest."""
+    await enforce_space_rate_limit(payload.space_id, limiter)
+    try:
+        res = await upsert_timeline_digest(
+            store,
+            space_id=payload.space_id,
+            digest_source_id=payload.digest_source_id,
+            period_label=payload.period_label,
+            events=payload.events,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+
+    return KnowledgeTimelineDigestResponse(
+        space_id=res.space_id,
+        digest_source_id=res.digest_source_id,
+        period_label=res.period_label,
+        events_included=res.events_included,
+        chunks_indexed=res.chunks_indexed,
     )
 
 

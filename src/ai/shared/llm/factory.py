@@ -3,10 +3,11 @@
 import itertools
 import time
 from collections import OrderedDict
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Callable, Iterator, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import Any, Literal
+from weakref import WeakKeyDictionary
 
 from langchain_core.language_models import LanguageModelInput
 from langchain_core.messages import AIMessage
@@ -34,6 +35,7 @@ class LLMOverride(BaseModel):
     api_key: SecretStr
     model: str = ""
     base_url: str = ""
+    is_byok: bool = True
 
 
 _ACTIVE_LLM_OVERRIDE: ContextVar[LLMOverride | None] = ContextVar(
@@ -94,8 +96,128 @@ def _extract_token_counts(message: Any) -> tuple[int, int]:
     return 0, 0
 
 
-class ContextAwareChatRunnable(Runnable[LanguageModelInput, AIMessage]):
-    """Transparent proxy that routes `agent` and `default` calls to BYOK when bound in ContextVar."""
+class _MeteredProxyRunnable(Runnable[LanguageModelInput, AIMessage]):
+    """Shared metered `invoke`/`ainvoke`/`stream`/`astream` proxy for context-aware chat models."""
+
+    def _resolve_target(self) -> ChatRunnable:
+        raise NotImplementedError
+
+    def _record_metric(
+        self,
+        *,
+        start: float,
+        ok: bool,
+        response: Any = None,
+        in_tokens: int = 0,
+        out_tokens: int = 0,
+    ) -> None:
+        raise NotImplementedError
+
+    def invoke(
+        self,
+        input: LanguageModelInput,
+        config: RunnableConfig | None = None,
+        **kwargs: Any,
+    ) -> AIMessage:
+        start = time.perf_counter()
+        response: AIMessage | None = None
+        ok = False
+        try:
+            response = self._resolve_target().invoke(input, config=config, **kwargs)
+            ok = True
+            return response
+        finally:
+            in_tok, out_tok = _extract_token_counts(response) if response is not None else (0, 0)
+            self._record_metric(
+                start=start,
+                ok=ok,
+                response=response,
+                in_tokens=in_tok,
+                out_tokens=out_tok,
+            )
+
+    async def ainvoke(
+        self,
+        input: LanguageModelInput,
+        config: RunnableConfig | None = None,
+        **kwargs: Any,
+    ) -> AIMessage:
+        start = time.perf_counter()
+        response: AIMessage | None = None
+        ok = False
+        try:
+            response = await self._resolve_target().ainvoke(input, config=config, **kwargs)
+            ok = True
+            return response
+        finally:
+            in_tok, out_tok = _extract_token_counts(response) if response is not None else (0, 0)
+            self._record_metric(
+                start=start,
+                ok=ok,
+                response=response,
+                in_tokens=in_tok,
+                out_tokens=out_tok,
+            )
+
+    def stream(
+        self,
+        input: LanguageModelInput,
+        config: RunnableConfig | None = None,
+        **kwargs: Any,
+    ) -> Iterator[AIMessage]:
+        start = time.perf_counter()
+        in_tok = 0
+        out_tok = 0
+        last_chunk: Any = None
+        ok = False
+        try:
+            for chunk in self._resolve_target().stream(input, config=config, **kwargs):
+                last_chunk = chunk
+                c_in, c_out = _extract_token_counts(chunk)
+                in_tok += c_in
+                out_tok += c_out
+                yield chunk
+            ok = True
+        finally:
+            self._record_metric(
+                start=start,
+                ok=ok,
+                response=last_chunk,
+                in_tokens=in_tok,
+                out_tokens=out_tok,
+            )
+
+    async def astream(
+        self,
+        input: LanguageModelInput,
+        config: RunnableConfig | None = None,
+        **kwargs: Any,
+    ) -> AsyncIterator[AIMessage]:
+        start = time.perf_counter()
+        in_tok = 0
+        out_tok = 0
+        last_chunk: Any = None
+        ok = False
+        try:
+            async for chunk in self._resolve_target().astream(input, config=config, **kwargs):
+                last_chunk = chunk
+                c_in, c_out = _extract_token_counts(chunk)
+                in_tok += c_in
+                out_tok += c_out
+                yield chunk
+            ok = True
+        finally:
+            self._record_metric(
+                start=start,
+                ok=ok,
+                response=last_chunk,
+                in_tokens=in_tok,
+                out_tokens=out_tok,
+            )
+
+
+class ContextAwareChatRunnable(_MeteredProxyRunnable):
+    """Transparent proxy with per-request key-pool rotation and ContextVar BYOK routing."""
 
     def __init__(
         self,
@@ -107,6 +229,7 @@ class ContextAwareChatRunnable(Runnable[LanguageModelInput, AIMessage]):
         temperature: float | None = None,
         timeout: float | None = None,
         metrics: LLMCallMetrics | None = None,
+        platform_pool: Sequence[ChatRunnable] | None = None,
     ) -> None:
         super().__init__()
         self._platform = platform_runnable
@@ -117,6 +240,45 @@ class ContextAwareChatRunnable(Runnable[LanguageModelInput, AIMessage]):
         self._timeout = timeout
         self._metrics = metrics
         self._byok_cache: OrderedDict[tuple[str, str, str], ChatRunnable] = OrderedDict()
+        self._rr_counter = itertools.count()
+        self._platform_pool: tuple[ChatRunnable, ...] = self._init_platform_pool(
+            platform_runnable,
+            platform_pool,
+        )
+
+    def _init_platform_pool(
+        self,
+        platform_runnable: ChatRunnable,
+        explicit_pool: Sequence[ChatRunnable] | None,
+    ) -> tuple[ChatRunnable, ...]:
+        if explicit_pool:
+            return tuple(explicit_pool)
+        key_pool = self._config.role_api_key_pool(self._role)
+        if len(key_pool) <= 1:
+            return (platform_runnable,)
+        primary = getattr(platform_runnable, "runnable", platform_runnable)
+        primary_key = getattr(primary, "openai_api_key", None)
+        if not isinstance(primary_key, SecretStr):
+            return (platform_runnable,)
+        raw_primary = primary_key.get_secret_value()
+        raw_keys = [k.get_secret_value() for k in key_pool]
+        if raw_primary not in raw_keys:
+            return (platform_runnable,)
+        start_idx = raw_keys.index(raw_primary)
+        pool: list[ChatRunnable] = [platform_runnable]
+        for offset in range(1, len(key_pool)):
+            key_idx = (start_idx + offset) % len(key_pool)
+            pool.append(
+                build_chat_model(
+                    self._config,
+                    role=self._role,
+                    model=self._model,
+                    temperature=self._temperature,
+                    timeout=self._timeout,
+                    key_index=key_idx,
+                )
+            )
+        return tuple(pool)
 
     @property
     def runnable(self) -> Any:
@@ -151,7 +313,9 @@ class ContextAwareChatRunnable(Runnable[LanguageModelInput, AIMessage]):
                 if len(self._byok_cache) > _BYOK_CLIENT_CACHE_CAPACITY:
                     self._byok_cache.popitem(last=False)
                 return built
-        return self._platform
+        if len(self._platform_pool) == 1:
+            return self._platform_pool[0]
+        return self._platform_pool[next(self._rr_counter) % len(self._platform_pool)]
 
     def _resolve_metric_model_name(self, response: Any = None) -> str:
         if response is not None:
@@ -186,107 +350,86 @@ class ContextAwareChatRunnable(Runnable[LanguageModelInput, AIMessage]):
             output_tokens=out_tokens,
         )
 
-    def invoke(
-        self,
-        input: LanguageModelInput,
-        config: RunnableConfig | None = None,
-        **kwargs: Any,
-    ) -> AIMessage:
-        start = time.perf_counter()
-        response: AIMessage | None = None
-        ok = False
-        try:
-            response = self._active_target().invoke(input, config=config, **kwargs)
-            ok = True
-            return response
-        finally:
-            in_tok, out_tok = _extract_token_counts(response) if response is not None else (0, 0)
-            self._record_metric(
-                start=start,
-                ok=ok,
-                response=response,
-                in_tokens=in_tok,
-                out_tokens=out_tok,
-            )
+    def _resolve_target(self) -> ChatRunnable:
+        return self._active_target()
 
-    async def ainvoke(
+    def bind_tools(
         self,
-        input: LanguageModelInput,
-        config: RunnableConfig | None = None,
+        tools: Sequence[Any],
+        *,
+        tool_choice: Any = None,
         **kwargs: Any,
-    ) -> AIMessage:
-        start = time.perf_counter()
-        response: AIMessage | None = None
-        ok = False
-        try:
-            response = await self._active_target().ainvoke(input, config=config, **kwargs)
-            ok = True
-            return response
-        finally:
-            in_tok, out_tok = _extract_token_counts(response) if response is not None else (0, 0)
-            self._record_metric(
-                start=start,
-                ok=ok,
-                response=response,
-                in_tokens=in_tok,
-                out_tokens=out_tok,
-            )
+    ) -> ChatRunnable:
+        """Return a context-aware runnable that binds `tools` on the active target (including fallbacks)."""
+        bind_kwargs = dict(kwargs)
+        if tool_choice is not None:
+            bind_kwargs["tool_choice"] = tool_choice
+        frozen_tools = tuple(tools)
+        return _BoundContextAwareRunnable(
+            self,
+            lambda target: _bind_target_tools(target, frozen_tools, **bind_kwargs),
+        )
 
-    def stream(
-        self,
-        input: LanguageModelInput,
-        config: RunnableConfig | None = None,
-        **kwargs: Any,
-    ) -> Iterator[AIMessage]:
-        start = time.perf_counter()
-        in_tok = 0
-        out_tok = 0
-        last_chunk: Any = None
-        ok = False
-        try:
-            for chunk in self._active_target().stream(input, config=config, **kwargs):
-                last_chunk = chunk
-                c_in, c_out = _extract_token_counts(chunk)
-                in_tok += c_in
-                out_tok += c_out
-                yield chunk
-            ok = True
-        finally:
-            self._record_metric(
-                start=start,
-                ok=ok,
-                response=last_chunk,
-                in_tokens=in_tok,
-                out_tokens=out_tok,
-            )
 
-    async def astream(
+def _bind_target_tools(
+    target: Any,
+    tools: Sequence[Any],
+    **kwargs: Any,
+) -> ChatRunnable:
+    bind_fn = getattr(target, "bind_tools", None)
+    if callable(bind_fn):
+        bound: Any = bind_fn(tools, **kwargs)
+        return bound
+    primary = getattr(target, "runnable", None)
+    fallbacks = getattr(target, "fallbacks", None)
+    if primary is not None and fallbacks is not None:
+        bound_primary = _bind_target_tools(primary, tools, **kwargs)
+        bound_fallbacks = [_bind_target_tools(fb, tools, **kwargs) for fb in fallbacks]
+        return bound_primary.with_fallbacks(bound_fallbacks)
+    raise TypeError(f"{type(target).__name__} does not support bind_tools()")
+
+
+class _BoundContextAwareRunnable(_MeteredProxyRunnable):
+    """Proxy returned by `ContextAwareChatRunnable.bind_tools`."""
+
+    def __init__(
         self,
-        input: LanguageModelInput,
-        config: RunnableConfig | None = None,
-        **kwargs: Any,
-    ) -> AsyncIterator[AIMessage]:
-        start = time.perf_counter()
-        in_tok = 0
-        out_tok = 0
-        last_chunk: Any = None
-        ok = False
+        parent: ContextAwareChatRunnable,
+        binder: Callable[[ChatRunnable], ChatRunnable],
+    ) -> None:
+        super().__init__()
+        self._parent = parent
+        self._binder = binder
+        self._bound_cache: WeakKeyDictionary[Any, ChatRunnable] = WeakKeyDictionary()
+
+    def _resolve_target(self) -> ChatRunnable:
+        target = self._parent._active_target()
+        cached = self._bound_cache.get(target)
+        if cached is not None:
+            return cached
+        bound = self._binder(target)
         try:
-            async for chunk in self._active_target().astream(input, config=config, **kwargs):
-                last_chunk = chunk
-                c_in, c_out = _extract_token_counts(chunk)
-                in_tok += c_in
-                out_tok += c_out
-                yield chunk
-            ok = True
-        finally:
-            self._record_metric(
-                start=start,
-                ok=ok,
-                response=last_chunk,
-                in_tokens=in_tok,
-                out_tokens=out_tok,
-            )
+            self._bound_cache[target] = bound
+        except TypeError:
+            pass
+        return bound
+
+    def _record_metric(
+        self,
+        *,
+        start: float,
+        ok: bool,
+        response: Any = None,
+        in_tokens: int = 0,
+        out_tokens: int = 0,
+    ) -> None:
+        self._parent._record_metric(
+            start=start,
+            ok=ok,
+            response=response,
+            in_tokens=in_tokens,
+            out_tokens=out_tokens,
+        )
 
 
 def _resolve_model(config: LLMConfig, role: ModelRole, model: str | None) -> str:
@@ -321,6 +464,28 @@ def _rotate_key_pool(
     return rotated[0], rotated[1:]
 
 
+def _make_chat_openai(
+    *,
+    model: str,
+    api_key: SecretStr,
+    base_url: str | None,
+    temperature: float,
+    timeout: float,
+    max_retries: int,
+    max_completion_tokens: int | None,
+) -> ChatOpenAI:
+    return ChatOpenAI(
+        model=model,
+        api_key=api_key,
+        base_url=base_url,
+        temperature=temperature,
+        timeout=timeout,
+        max_retries=max_retries,
+        max_completion_tokens=max_completion_tokens,
+        default_headers=_DEFAULT_HEADERS,
+    )
+
+
 def build_chat_model(
     config: LLMConfig,
     *,
@@ -343,23 +508,38 @@ def build_chat_model(
     if override is not None and override.api_key.get_secret_value().strip():
         byok_model = _resolve_model(config, role, override.model or model)
         byok_base_url = override.base_url.strip() or config.base_url or None
-        return ChatOpenAI(
+        use_platform_fallback = config.has_fallback and not override.is_byok
+        primary = _make_chat_openai(
             model=byok_model,
             api_key=override.api_key,
             base_url=byok_base_url,
             temperature=active_temp,
             timeout=active_timeout,
-            max_retries=config.max_retries,
+            max_retries=0 if use_platform_fallback else config.max_retries,
             max_completion_tokens=active_max_tokens,
-            default_headers=_DEFAULT_HEADERS,
         )
+        if use_platform_fallback:
+            return primary.with_fallbacks(
+                [
+                    _make_chat_openai(
+                        model=config.fallback_model or byok_model,
+                        api_key=config.fallback_api_key,
+                        base_url=config.fallback_base_url or config.base_url or None,
+                        temperature=active_temp,
+                        timeout=active_timeout,
+                        max_retries=config.fallback_max_retries,
+                        max_completion_tokens=active_max_tokens,
+                    )
+                ]
+            )
+        return primary
 
     active_model = _resolve_model(config, role, model)
     active_base_url = config.effective_base_url(role) or None
     rotation_idx = next(_key_rotation_counter) if key_index is None else key_index
     primary_key, backup_keys = _rotate_key_pool(config.role_api_key_pool(role), rotation_idx)
 
-    primary = ChatOpenAI(
+    primary = _make_chat_openai(
         model=active_model,
         api_key=primary_key,
         base_url=active_base_url,
@@ -367,11 +547,10 @@ def build_chat_model(
         timeout=active_timeout,
         max_retries=config.max_retries,
         max_completion_tokens=active_max_tokens,
-        default_headers=_DEFAULT_HEADERS,
     )
 
     fallbacks: list[ChatRunnable] = [
-        ChatOpenAI(
+        _make_chat_openai(
             model=active_model,
             api_key=extra_key,
             base_url=active_base_url,
@@ -379,14 +558,13 @@ def build_chat_model(
             timeout=active_timeout,
             max_retries=config.fallback_max_retries,
             max_completion_tokens=active_max_tokens,
-            default_headers=_DEFAULT_HEADERS,
         )
         for extra_key in backup_keys
     ]
 
     if config.has_fallback:
         fallbacks.append(
-            ChatOpenAI(
+            _make_chat_openai(
                 model=config.fallback_model or active_model,
                 api_key=config.fallback_api_key,
                 base_url=config.fallback_base_url or config.base_url or None,
@@ -394,7 +572,6 @@ def build_chat_model(
                 timeout=active_timeout,
                 max_retries=config.fallback_max_retries,
                 max_completion_tokens=active_max_tokens,
-                default_headers=_DEFAULT_HEADERS,
             )
         )
 

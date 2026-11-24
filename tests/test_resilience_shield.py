@@ -419,6 +419,7 @@ def test_build_chat_model_per_role_base_url_and_api_key() -> None:
         router_base_url="https://router.example/v1",
         router_api_key=SecretStr("sk-router-key"),
         agent_model="model-agent",
+        agent_base_url="",
         agent_api_key=SecretStr("sk-agent-key"),
         fallback_base_url="https://fallback.example/v1",
         fallback_api_key=SecretStr("sk-fallback-key"),
@@ -503,12 +504,7 @@ async def test_supervisor_planner_deterministic_router_cache() -> None:
             content='{"mode": "delegate", "targets": [{"agent": "library_agent", "instruction": "find paper"}], "needs_followup": false, "reasoning": "library lookup"}'
         )
 
-    cache = InMemoryToolCache()
-    planner = LLMSupervisorPlanner(
-        RunnableLambda(_router_fn),
-        cache=cache,
-        cache_ttl_seconds=300,
-    )
+    planner = LLMSupervisorPlanner(RunnableLambda(_router_fn))
     registry = AgentRegistry(
         [
             AgentSpec(
@@ -525,13 +521,16 @@ async def test_supervisor_planner_deterministic_router_cache() -> None:
     }
     cfg: RunnableConfig = {}
 
-    # 1. First plan invokes router LLM and caches decision
-    d1 = await planner.plan(state, registry, cfg)
-    assert d1.mode == "delegate"
-    assert d1.targets[0].agent == "library_agent"
-    assert llm_calls["count"] == 1
+    from ai.shared.contracts.auth import bind_delegation_token
 
-    # 2. Second identical plan hits ToolCache -> 0 new LLM calls ($0 cost)
-    d2 = await planner.plan(state, registry, cfg)
-    assert d2 == d1
-    assert llm_calls["count"] == 1
+    # 1. First plan invokes router LLM
+    with bind_delegation_token("test-delegation-token"):
+        d1 = await planner.plan(state, registry, cfg)
+        assert d1.mode == "delegate"
+        assert d1.targets[0].agent == "library_agent"
+        assert llm_calls["count"] == 1
+
+        # 2. Second plan re-evaluates fresh (router cache removed to prevent stale multi-turn routing)
+        d2 = await planner.plan(state, registry, cfg)
+        assert d2 == d1
+        assert llm_calls["count"] == 2

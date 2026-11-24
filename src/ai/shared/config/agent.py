@@ -9,7 +9,7 @@ class BackendAgentConfig(EnvConfigBase):
     """Backend gateway settings common to the editor, library, and project agents."""
 
     enabled: bool = True
-    backend_url: str = Field(default="http://127.0.0.1:3000")
+    backend_url: str = Field(default="http://127.0.0.1:18300")
     timeout_seconds: float = Field(default=15.0, gt=0.0, le=120.0)
 
     @field_validator("backend_url")

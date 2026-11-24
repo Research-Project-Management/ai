@@ -48,10 +48,6 @@ class EmbeddingConfig(EnvConfigBase):
     def effective_fallback_model(self) -> str:
         return self.fallback_model.strip() or self.model
 
-    @property
-    def effective_target_name(self) -> str:
-        return self.collection_alias.strip() or self.collection_name
-
     def should_send_dimensions(self, model_name: str | None = None) -> bool:
         if self.send_dimensions is not None:
             return self.send_dimensions

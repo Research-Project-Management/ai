@@ -99,11 +99,8 @@ def test_attached_source_separation_and_metadata_exclusion() -> None:
     parsed = parse_attached_sources(raw)
     assert len(parsed) == 4
     assert parsed[0].effective_source_id == "upload-1"
-    assert parsed[0].effective_source_type == "upload"
     assert parsed[1].effective_source_id == "file-indexed"
-    assert parsed[1].effective_source_type == "file"
     assert parsed[2].effective_source_id == "file-pdf"
-    assert parsed[2].effective_source_type == "file"
     assert parsed[3].effective_source_id is None
 
     # Metadata-only item_id must NEVER leak into Qdrant filters even if in fallback documentIds
@@ -591,7 +588,7 @@ def test_supervisor_prompt_renders_attached_sources_with_routing_guidance() -> N
     assert "status=metadata/notes only" in prompt
     assert "extra-upload" in prompt
     # Already-covered file-1 & item-meta are not duplicated in fallback document_ids
-    assert "Attached workspace document_ids: [extra-upload]" in prompt
+    assert "Attached space document_ids: [extra-upload]" in prompt
 
 
 def test_rag_slice_isolation_and_single_root_init() -> None:

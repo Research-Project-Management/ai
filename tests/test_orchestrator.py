@@ -8,7 +8,13 @@ import pytest
 from fastapi.testclient import TestClient
 from langchain_core.callbacks import AsyncCallbackManagerForLLMRun, CallbackManagerForLLMRun
 from langchain_core.language_models import BaseChatModel, LanguageModelInput
-from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage, HumanMessage
+from langchain_core.messages import (
+    AIMessage,
+    AIMessageChunk,
+    BaseMessage,
+    HumanMessage,
+    SystemMessage,
+)
 from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
 from langchain_core.runnables import RunnableConfig, RunnableLambda
 from langgraph.checkpoint.memory import MemorySaver
@@ -246,7 +252,7 @@ async def test_parallel_fan_out_and_multi_turn_state_reset() -> None:
         )
 
     graph = build_root_graph(
-        llm=_make_stub("Synthesized output"),
+        llm=_make_stub("Synthesized output [[cite:1]][[cite:2]]"),
         router_llm=RunnableLambda(_router_fn),
         registry=registry,
         checkpointer=MemorySaver(),
@@ -361,7 +367,7 @@ def test_sse_stream_isolates_router_tokens_and_emits_lifecycle_events() -> None:
         }
     )
     router_model = _StreamingStubChatModel(tokens=[router_json])
-    synth_model = _StreamingStubChatModel(tokens=["Hello ", "Synthesized"])
+    synth_model = _StreamingStubChatModel(tokens=["Hello ", "Synthesized [[cite:1]]"])
 
     app = create_app(
         settings=_test_settings(),
@@ -390,7 +396,7 @@ def test_sse_stream_isolates_router_tokens_and_emits_lifecycle_events() -> None:
     assert event_names[-1] == "run.finished"
 
     deltas = "".join(data["delta"] for name, data in parsed if name == "text.delta")
-    assert deltas == "Hello Synthesized"
+    assert deltas == "Hello Synthesized [[cite:1]]"
     assert router_json not in deltas
 
     finished_data = parsed[-1][1]
@@ -492,7 +498,7 @@ async def test_bulkhead_isolates_failing_parallel_agent_while_preserving_healthy
 
     def _synth_fn(prompt_input: LanguageModelInput) -> AIMessage:
         captured_prompt.append(str(prompt_input))
-        return AIMessage(content="Partial synthesis with healthy data")
+        return AIMessage(content="Partial synthesis with healthy data [[cite:1]]")
 
     router_json = json.dumps(
         {
@@ -510,7 +516,7 @@ async def test_bulkhead_isolates_failing_parallel_agent_while_preserving_healthy
         registry=registry,
     )
     result = await graph.ainvoke({"messages": [HumanMessage(content="Fetch both")]})
-    assert result["final_response"] == "Partial synthesis with healthy data"
+    assert result["final_response"] == "Partial synthesis with healthy data [[cite:1]]"
     assert [c.source_id for c in result["citations"]] == ["H1"]
     outputs_by_agent = {out.agent: out for out in result["agent_outputs"]}
     assert outputs_by_agent["healthy"].status == "ok"
@@ -524,7 +530,8 @@ async def test_sliding_window_context_policy_bounds_long_history() -> None:
 
     def _counting_llm(prompt_input: LanguageModelInput) -> AIMessage:
         assert isinstance(prompt_input, list)
-        seen_message_counts.append(len(prompt_input))
+        assert isinstance(prompt_input[0], SystemMessage)
+        seen_message_counts.append(sum(1 for m in prompt_input if not isinstance(m, SystemMessage)))
         return AIMessage(content="bounded-ok")
 
     policy = SlidingWindowContextPolicy(max_messages=4, max_chars=500)
@@ -668,36 +675,58 @@ def test_enforce_routing_invariants_requires_reading_attached_sources_first() ->
     assert enforced_1.needs_followup is True
     assert "MeshGraphNets" in enforced_1.targets[0].instruction
 
-    # 2. Attached metadata-only paper + direct on round 1 -> library_agent (with item_id) + needs_followup=False
-    direct_decision = RoutingDecision(mode="direct", reasoning="missing content")
-    enforced_2 = enforce_routing_invariants(
+    # 2. Direct (No-Retrieval) on round 1 is preserved untouched even when papers are attached
+    direct_decision = RoutingDecision(mode="direct", reasoning="no retrieval needed")
+    enforced_2a = enforce_routing_invariants(
         direct_decision,
-        query="tạo 5 tasks từ tài liệu trên",
+        query="hi bro",
+        request_context=indexed_ctx,
+        prior_outputs=(),
+        registry=registry,
+    )
+    assert enforced_2a == direct_decision
+
+    enforced_2b = enforce_routing_invariants(
+        direct_decision,
+        query="explain gradient descent",
         request_context=meta_only_ctx,
         prior_outputs=(),
         registry=registry,
     )
-    assert enforced_2.mode == "delegate"
-    assert [t.agent for t in enforced_2.targets] == ["library_agent"]
-    assert enforced_2.needs_followup is False
-    assert "item-1" in enforced_2.targets[0].instruction
+    assert enforced_2b == direct_decision
 
-    # 3. Round 2 (prior_outputs non-empty) + project_agent -> untouched
-    enforced_3 = enforce_routing_invariants(
-        proj_decision,
-        query="tạo 5 tasks từ tài liệu trên",
-        request_context=indexed_ctx,
-        prior_outputs=(AgentOutput(agent="rag_agent", content="Summary of paper"),),
-        registry=registry,
-    )
-    assert enforced_3 == proj_decision
+    # 2c. Attached metadata-only paper + project_agent on round 1 -> library_agent + needs_followup=True
+    from ai.shared.contracts.auth import bind_delegation_token
 
-    # 4. No attached sources -> untouched
-    enforced_4 = enforce_routing_invariants(
-        proj_decision,
-        query="create 5 tasks",
-        request_context={"project_id": "p-1"},
-        prior_outputs=(),
-        registry=registry,
-    )
-    assert enforced_4 == proj_decision
+    with bind_delegation_token("Bearer test-jwt"):
+        enforced_2c = enforce_routing_invariants(
+            proj_decision,
+            query="tạo 5 tasks từ tài liệu trên",
+            request_context=meta_only_ctx,
+            prior_outputs=(),
+            registry=registry,
+        )
+        assert enforced_2c.mode == "delegate"
+        assert [t.agent for t in enforced_2c.targets] == ["library_agent"]
+        assert enforced_2c.needs_followup is True
+        assert "item-1" in enforced_2c.targets[0].instruction
+
+        # 3. Round 2 (prior_outputs non-empty) + project_agent -> untouched
+        enforced_3 = enforce_routing_invariants(
+            proj_decision,
+            query="tạo 5 tasks từ tài liệu trên",
+            request_context=indexed_ctx,
+            prior_outputs=(AgentOutput(agent="rag_agent", content="Summary of paper"),),
+            registry=registry,
+        )
+        assert enforced_3 == proj_decision
+
+        # 4. No attached sources -> untouched
+        enforced_4 = enforce_routing_invariants(
+            proj_decision,
+            query="create 5 tasks",
+            request_context={"project_id": "p-1"},
+            prior_outputs=(),
+            registry=registry,
+        )
+        assert enforced_4 == proj_decision

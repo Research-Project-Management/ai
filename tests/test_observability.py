@@ -291,14 +291,12 @@ async def test_resilience_health_endpoint_auth_and_payload() -> None:
             "llm_metrics",
             "ingestion_queue",
             "token_budget",
-            "provenance",
         }
         assert body["circuit_breakers"].get("github") == "closed"
         assert body["tool_metrics"]["github_fetch"]["calls"] == 1
         assert body["llm_metrics"]["agent:deepseek-v3.2"]["calls"] == 1
         assert body["ingestion_queue"]["max_queue_size"] >= 1
         assert body["token_budget"]["total_tokens"] == 600
-        assert "total_nodes" in body["provenance"]
 
         # 4. Prometheus /metrics requires auth and emits 0.0.4 text format
         metrics_unauth = client.get("/metrics")
@@ -337,9 +335,10 @@ async def test_chat_enforces_and_records_token_budget() -> None:
     )
     headers = {"X-Internal-Key": "obs-test-key"}
     with TestClient(app) as client:
-        app.state.token_budget = InMemoryTokenBudget(max_tokens_per_window=300)
+        # Each turn runs supervisor router (200 tok) + direct response (200 tok) = 400 tokens.
+        app.state.token_budget = InMemoryTokenBudget(max_tokens_per_window=500)
 
-        # 1. First sync chat consumes 200 tokens (< 300 limit) and records usage
+        # 1. First sync chat consumes 400 tokens (< 500 limit) and records usage
         ok1 = client.post(
             "/chat/sync",
             headers=headers,
@@ -351,10 +350,10 @@ async def test_chat_enforces_and_records_token_budget() -> None:
         )
         assert ok1.status_code == 200
         quota_after_1 = await app.state.token_budget.check("space-budget-1")
-        assert quota_after_1.used_tokens >= 200
+        assert quota_after_1.used_tokens == 400
         assert quota_after_1.allowed is True
 
-        # 2. Second sync chat pushes used_tokens >= 300 -> allowed becomes False
+        # 2. Second sync chat pushes used_tokens to 800 (>= 500) -> allowed becomes False
         ok2 = client.post(
             "/chat/sync",
             headers=headers,

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -83,13 +84,10 @@ async def run_tool_batch[R: ToolOutcome, C: HasProvenance](
     cites = list(citations)
     batch = BatchTracker(expected_calls=len(approved))
 
-    for call in approved:
-        spec: RunnableSpec | None = get_spec(str(call.get("tool") or ""))
-        if spec is None:
-            batch.observe(risk_tier=None, status=None)
-            continue
-        raw_args = call.get("args")
-        args_mapping = raw_args if isinstance(raw_args, Mapping) else {}
+    async def _run_one(
+        spec: RunnableSpec,
+        args_mapping: Mapping[str, Any],
+    ) -> R:
         args = spec.args_schema.model_validate(args_mapping)
         await events.emit_tool_started(
             spec.name,
@@ -112,12 +110,51 @@ async def run_tool_batch[R: ToolOutcome, C: HasProvenance](
         except Exception as exc:
             logger.warning("Tool '%s' failed: %s", spec.name, exc, exc_info=True)
             result = failure(spec.name, f"{type(exc).__name__}: {exc}")
+        return result
 
+    async def _record_one(spec: RunnableSpec, result: R) -> None:
+        nonlocal cites
         batch.observe(risk_tier=spec.risk_tier, status=result.status)
         if after_result is not None:
             await after_result(result)
         await events.emit_tool_completed(spec.name, result.status, config, error=result.error)
         obs.append(observation_of(result))
         cites = dedupe_citations(cites, list(result.citations))
+
+    idx = 0
+    total = len(approved)
+    while idx < total:
+        call = approved[idx]
+        spec = get_spec(str(call.get("tool") or ""))
+        if spec is None:
+            batch.observe(risk_tier=None, status=None)
+            idx += 1
+            continue
+
+        if spec.risk_tier == "read":
+            read_group: list[tuple[RunnableSpec, Mapping[str, Any]]] = []
+            while idx < total:
+                next_call = approved[idx]
+                next_spec = get_spec(str(next_call.get("tool") or ""))
+                if next_spec is None or next_spec.risk_tier != "read":
+                    break
+                raw_args = next_call.get("args")
+                read_group.append((next_spec, raw_args if isinstance(raw_args, Mapping) else {}))
+                idx += 1
+            if len(read_group) == 1:
+                single_spec, single_args = read_group[0]
+                await _record_one(single_spec, await _run_one(single_spec, single_args))
+            else:
+                results = await asyncio.gather(
+                    *(_run_one(s, a) for s, a in read_group),
+                )
+                for (g_spec, _), res in zip(read_group, results, strict=True):
+                    await _record_one(g_spec, res)
+            continue
+
+        raw_args = call.get("args")
+        args_mapping = raw_args if isinstance(raw_args, Mapping) else {}
+        await _record_one(spec, await _run_one(spec, args_mapping))
+        idx += 1
 
     return BatchOutcome(observations=obs, citations=cites, is_terminal=batch.is_terminal)

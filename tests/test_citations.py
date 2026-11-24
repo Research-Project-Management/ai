@@ -45,6 +45,14 @@ def test_select_indexed_citations_preserves_canonical_sparse_index() -> None:
     assert selected[0].snippet == "Snippet 6"
 
 
+def test_select_indexed_citations_returns_empty_when_answer_cites_nothing() -> None:
+    candidates = [
+        CitationItem(source_id="doc-1", title="ResNet", page=i, snippet=f"Snippet {i}")
+        for i in range(1, 4)
+    ]
+    assert select_indexed_citations("Hello! How can I assist you today?", candidates) == []
+
+
 async def test_citation_integrity_guard_preserves_distinct_indices_and_dedups_unindexed() -> None:
     guard = CitationIntegrityGuard()
     draft = DraftOutput(
