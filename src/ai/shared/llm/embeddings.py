@@ -69,7 +69,6 @@ class OpenAICompatibleEmbedder:
         send_dimensions: bool = False,
     ) -> None:
         self._dimensions = dimensions
-        self._batch_size = batch_size
         self._max_input_chars = max_input_chars
         self._query_cache: OrderedDict[str, list[float]] = OrderedDict()
         self._client = OpenAIEmbeddings(

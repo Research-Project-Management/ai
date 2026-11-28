@@ -7,7 +7,6 @@ from collections.abc import AsyncIterator, Callable, Iterator, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import Any, Literal
-from weakref import WeakKeyDictionary
 
 from langchain_core.language_models import LanguageModelInput
 from langchain_core.messages import AIMessage
@@ -400,18 +399,16 @@ class _BoundContextAwareRunnable(_MeteredProxyRunnable):
         super().__init__()
         self._parent = parent
         self._binder = binder
-        self._bound_cache: WeakKeyDictionary[Any, ChatRunnable] = WeakKeyDictionary()
+        self._bound_cache: dict[int, ChatRunnable] = {}
 
     def _resolve_target(self) -> ChatRunnable:
         target = self._parent._active_target()
-        cached = self._bound_cache.get(target)
+        target_id = id(target)
+        cached = self._bound_cache.get(target_id)
         if cached is not None:
             return cached
         bound = self._binder(target)
-        try:
-            self._bound_cache[target] = bound
-        except TypeError:
-            pass
+        self._bound_cache[target_id] = bound
         return bound
 
     def _record_metric(

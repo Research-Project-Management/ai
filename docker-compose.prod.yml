@@ -22,10 +22,12 @@ services:
       APP_ENV: production
       HOST: 0.0.0.0
       PORT: ${PORT:-18420}
-      DATABASE_URL: "postgresql://${POSTGRES_USER:-ai_user}:${POSTGRES_PASSWORD:-change-me-postgres}@ai-postgres:5432/${POSTGRES_DB:-ai_db}"
+      DATABASE_URL: "postgresql://${POSTGRES_USER:-ai_user}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}@ai-postgres:5432/${POSTGRES_DB:-ai_db}"
       REDIS_URL: "redis://ai-redis:6379"
       QDRANT_URL: "http://ai-qdrant:6333"
       LIBRARY_BACKEND_URL: "${LIBRARY_BACKEND_URL:-https://api.example.com}"
+      EDITOR_BACKEND_URL: "${EDITOR_BACKEND_URL:-${LIBRARY_BACKEND_URL:-https://api.example.com}}"
+      PROJECT_BACKEND_URL: "${PROJECT_BACKEND_URL:-${LIBRARY_BACKEND_URL:-https://api.example.com}}"
     ports:
       - "127.0.0.1:${PORT:-18420}:18420"
     depends_on:
@@ -47,7 +49,7 @@ services:
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-ai_db}
       POSTGRES_USER: ${POSTGRES_USER:-ai_user}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
     volumes:
       - ai_postgres_data:/var/lib/postgresql/data
     healthcheck:

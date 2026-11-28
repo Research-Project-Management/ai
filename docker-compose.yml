@@ -11,12 +11,14 @@ services:
       - path: .env
         required: false
     environment:
-      PORT: 18420
+      PORT: ${PORT:-18420}
       DATABASE_URL: "postgresql://${POSTGRES_USER:-ai_user}:${POSTGRES_PASSWORD:-ai_password}@ai-postgres:5432/${POSTGRES_DB:-ai_db}"
       REDIS_URL: "redis://ai-redis:6379"
       QDRANT_URL: "http://ai-qdrant:6333"
       WEB_SEARCH_SEARXNG_URL: "http://ai-searxng:8080"
-      LIBRARY_BACKEND_URL: "${LIBRARY_BACKEND_URL:-http://host.docker.internal:3000}"
+      LIBRARY_BACKEND_URL: "${LIBRARY_BACKEND_URL:-http://host.docker.internal:18300}"
+      EDITOR_BACKEND_URL: "${EDITOR_BACKEND_URL:-http://host.docker.internal:18300}"
+      PROJECT_BACKEND_URL: "${PROJECT_BACKEND_URL:-http://host.docker.internal:18300}"
     ports:
       - "127.0.0.1:18420:18420"
     depends_on:
